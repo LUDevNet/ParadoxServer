@@ -83,12 +83,28 @@ async fn main() -> color_eyre::Result<()> {
     let hnd = hnd.into_tables()?;
     let hnd_state = warp::any().map(move || hnd.clone());
 
-    let tables = warp::path("tables");
-    let table = tables.and(warp::path::param()).and(hnd_state);
+    let tables = warp::path("tables").and(hnd_state);
+    let table = tables.clone().and(warp::path::param());
+
+    // The `/tables` endpoint
+    let tables = tables
+        .and(warp::path::end())
+        .map(|db: ArcHandle<_, FDBHeader>| {
+            let db = db.as_bytes_handle();
+
+            let mut list = Vec::with_capacity(db.raw().tables.count as usize);
+            let header_list = db.table_header_list().unwrap();
+            for tbl in header_list {
+                let def = tbl.into_definition().unwrap();
+                let name = *def.table_name().unwrap().raw();
+                list.push(name);
+            }
+            warp::reply::json(&list)
+        });
 
     // The `/tables/:name/def` endpoint
     let table_def = table.clone().and(warp::path("def")).map(
-        move |name: String, db_table: ArcHandle<_, FDBHeader>| {
+        move |db_table: ArcHandle<_, FDBHeader>, name: String| {
             let lname = Latin1String::encode(&name);
             let db_table = db_table.as_bytes_handle();
             let table = db_table.into_table_by_name(lname.as_ref()).unwrap();
@@ -103,7 +119,7 @@ async fn main() -> color_eyre::Result<()> {
 
     // The `/tables/:name/:key` endpoint
     let table_get = table.clone().and(warp::path::param()).map(
-        move |name: String, db_table: ArcHandle<_, FDBHeader>, key: String| {
+        move |db_table: ArcHandle<_, FDBHeader>, name: String, key: String| {
             let lname = Latin1String::encode(&name);
             let db_table = db_table.as_bytes_handle();
 
@@ -112,12 +128,12 @@ async fn main() -> color_eyre::Result<()> {
     );
 
     // The `/tables/:name/content` endpoint
-    let table_content = table.and(warp::path("content")).map(|_: String, _| {
+    let table_content = table.and(warp::path("content")).map(|_, _: String| {
         let our_ids = vec![1, 3, 7, 13];
         warp::reply::json(&our_ids)
     });
 
-    let routes = warp::get().and(table_def.or(table_content).or(table_get));
+    let routes = warp::get().and(tables.or(table_def).or(table_content).or(table_get));
 
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
