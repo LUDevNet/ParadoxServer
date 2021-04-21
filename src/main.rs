@@ -18,12 +18,30 @@ fn default_port() -> u16 {
 }
 
 #[derive(Deserialize)]
+struct CorsOptions {
+    all: bool,
+    domains: Vec<String>,
+}
+
+impl Default for CorsOptions {
+    fn default() -> Self {
+        Self {
+            all: true,
+            domains: vec![],
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct GeneralOptions {
     /// The port for the server
     #[serde(default = "default_port")]
     port: u16,
     /// Bind to `0.0.0.0` instead of `127.0.0.1`
     public: bool,
+    /// The allowed cross-origin domains
+    #[serde(default)]
+    cors: CorsOptions,
 }
 
 #[derive(Deserialize)]
@@ -186,8 +204,8 @@ async fn main() -> color_eyre::Result<()> {
 
     let routes = warp::get().and(
         tables
-            .or(table_def) /*.or(table_content)*/
-            .or(table_get),
+            .or(table_def).unify() /*.or(table_content)*/
+            .or(table_get).unify(),
     );
 
     let ip = if cfg.general.public {
@@ -195,7 +213,19 @@ async fn main() -> color_eyre::Result<()> {
     } else {
         [127, 0, 0, 1]
     };
-    let server = warp::serve(routes);
+    
+    let mut cors = warp::cors();
+    let cors_cfg = &cfg.general.cors;
+    if cors_cfg.all {
+        cors = cors.allow_any_origin();
+    } else {
+        for key in &cors_cfg.domains {
+            cors = cors.allow_origin(key.as_ref());
+        }
+    }
+    cors = cors.allow_methods(vec!["GET"]);
+    let to_serve = routes.with(cors);
+    let server = warp::serve(to_serve);
 
     if let Some(tls_cfg) = cfg.tls {
         if tls_cfg.enabled {
