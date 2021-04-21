@@ -9,20 +9,51 @@ use assembly_data::fdb::{
 use color_eyre::eyre::WrapErr;
 use linked_hash_map::LinkedHashMap;
 use mapr::Mmap;
+use serde::Deserialize;
 use structopt::StructOpt;
 use warp::{reply::Json, Filter};
+
+fn default_port() -> u16 {
+    3030
+}
+
+#[derive(Deserialize)]
+struct GeneralOptions {
+    /// The port for the server
+    #[serde(default = "default_port")]
+    port: u16,
+    /// Bind to `0.0.0.0` instead of `127.0.0.1`
+    public: bool,
+}
+
+#[derive(Deserialize)]
+struct TlsOptions {
+    /// Whether TLS is enabled
+    enabled: bool,
+    /// The private key file
+    key: PathBuf,
+    /// The certificate file
+    cert: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct DataOptions {
+    /// The CDClient database FDB file
+    cdclient: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct Config {
+    general: GeneralOptions,
+    tls: Option<TlsOptions>,
+    data: DataOptions,
+}
 
 #[derive(StructOpt)]
 /// Starts the server that serves a JSON API to the client files
 struct Options {
-    /// The cdclient file
-    file: PathBuf,
-    /// The port for the server
-    #[structopt(long, default_value = "3030")]
-    port: u16,
-    /// Bind to `0.0.0.0` instead of `127.0.0.1`
-    #[structopt(long)]
-    public: bool,
+    #[structopt(long, default_value = "paradox.toml")]
+    cfg: PathBuf,
 }
 
 fn table_index(db_table: Handle<'_, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
@@ -82,9 +113,22 @@ async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     let opts = Options::from_args();
 
+    let cfg_path = opts.cfg;
+    let cfg_file = std::fs::read_to_string(&cfg_path).wrap_err_with(|| {
+        format!(
+            "Failed to open config file '{}'",
+            cfg_path.display()
+        )
+    })?;
+    let cfg: Config = toml::from_str(&cfg_file)?;
+
     // Load the database file
-    let file = File::open(&opts.file)
-        .wrap_err_with(|| format!("Failed to open input file '{}'", opts.file.display()))?;
+    let file = File::open(&cfg.data.cdclient).wrap_err_with(|| {
+        format!(
+            "Failed to open input file '{}'",
+            cfg.data.cdclient.display()
+        )
+    })?;
     let hnd = ArcHandle::new_arc(unsafe { Mmap::map(&file)? });
     let hnd = hnd.into_tables()?;
     let hnd_state = warp::any().map(move || hnd.clone());
@@ -146,12 +190,25 @@ async fn main() -> color_eyre::Result<()> {
             .or(table_get),
     );
 
-    let ip = if opts.public {
+    let ip = if cfg.general.public {
         [0, 0, 0, 0]
     } else {
         [127, 0, 0, 1]
     };
-    warp::serve(routes).run((ip, opts.port)).await;
+    let server = warp::serve(routes);
+
+    if let Some(tls_cfg) = cfg.tls {
+        if tls_cfg.enabled {
+            server
+                .tls()
+                .key_path(tls_cfg.key)
+                .cert_path(tls_cfg.cert)
+                .run((ip, cfg.general.port))
+                .await;
+            return Ok(());
+        }
+    }
+    server.run((ip, cfg.general.port)).await;
 
     Ok(())
 }

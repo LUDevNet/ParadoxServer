@@ -1,0 +1,6 @@
+[general]
+port = 3030
+public = false
+
+[data]
+cdclient = "../cdclient.fdb"
