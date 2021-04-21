@@ -17,9 +17,15 @@ use warp::{reply::Json, Filter};
 struct Options {
     /// The cdclient file
     file: PathBuf,
+    /// The port for the server
+    #[structopt(long, default_value = "3030")]
+    port: u16,
+    /// Bind to `0.0.0.0` instead of `127.0.0.1`
+    #[structopt(long)]
+    public: bool,
 }
 
-fn table_index<'a>(db_table: Handle<'a, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
+fn table_index(db_table: Handle<'_, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
     let table = db_table.into_table_by_name(lname).unwrap();
 
     if let Some(table) = table.transpose() {
@@ -83,7 +89,8 @@ async fn main() -> color_eyre::Result<()> {
     let hnd = hnd.into_tables()?;
     let hnd_state = warp::any().map(move || hnd.clone());
 
-    let tables = warp::path("tables").and(hnd_state);
+    let api = warp::path("api").and(warp::path("v0"));
+    let tables = api.and(warp::path("tables")).and(hnd_state);
     let table = tables.clone().and(warp::path::param());
 
     // The `/tables` endpoint
@@ -127,15 +134,24 @@ async fn main() -> color_eyre::Result<()> {
         },
     );
 
-    // The `/tables/:name/content` endpoint
+    /*// The `/tables/:name/content` endpoint
     let table_content = table.and(warp::path("content")).map(|_, _: String| {
         let our_ids = vec![1, 3, 7, 13];
         warp::reply::json(&our_ids)
-    });
+    });*/
 
-    let routes = warp::get().and(tables.or(table_def).or(table_content).or(table_get));
+    let routes = warp::get().and(
+        tables
+            .or(table_def) /*.or(table_content)*/
+            .or(table_get),
+    );
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+    let ip = if opts.public {
+        [0, 0, 0, 0]
+    } else {
+        [127, 0, 0, 1]
+    };
+    warp::serve(routes).run((ip, opts.port)).await;
 
     Ok(())
 }
