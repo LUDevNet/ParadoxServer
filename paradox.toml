@@ -4,3 +4,4 @@ public = false
 
 [data]
 cdclient = "../cdclient.fdb"
+explorer_spa = "../../explorer/docs"

@@ -58,6 +58,8 @@ struct TlsOptions {
 struct DataOptions {
     /// The CDClient database FDB file
     cdclient: PathBuf,
+    /// The lu-explorer static files
+    explorer_spa: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -202,10 +204,16 @@ async fn main() -> color_eyre::Result<()> {
         warp::reply::json(&our_ids)
     });*/
 
+    let spa_path = cfg.data.explorer_spa;
+    let spa_index = spa_path.join("index.html");
+    let files = warp::fs::dir(spa_path).or(warp::fs::file(spa_index));
+    let spa = warp::path("explorer").and(files);
+
     let routes = warp::get().and(
         tables
             .or(table_def).unify() /*.or(table_content)*/
-            .or(table_get).unify(),
+            .or(table_get).unify()
+            .or(spa),
     );
 
     let ip = if cfg.general.public {

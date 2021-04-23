@@ -12,7 +12,7 @@ mapr = "0.8.0"
 toml = "0.5"
 
 [dependencies.warp]
-version = "0.2.5"
+version = "0.3"
 features = ["tls"]
 
 [dependencies.assembly-data]
@@ -24,8 +24,8 @@ version = "0.5.3"
 features = ["serde_impl"]
 
 [dependencies.tokio]
-version = "0.2"
-features = ["macros", "signal"]
+version = "1"
+features = ["rt-multi-thread", "macros", "signal"]
 
 [dependencies.serde]
 version = "1"
