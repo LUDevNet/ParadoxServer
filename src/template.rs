@@ -455,10 +455,10 @@ fn meta(
                 if let Some(mission) = data.get_mission_data(id) {
                     if !mission.is_mission {
                         kind = MissionKind::Achievement;
-                    }
-                    if let Some(icon_id) = mission.mission_icon_id {
-                        if let Some(path) = data.get_icon_path(icon_id) {
-                            image = Some(data.to_res_href(&path));
+                        if let Some(icon_id) = mission.mission_icon_id {
+                            if let Some(path) = data.get_icon_path(icon_id) {
+                                image = Some(data.to_res_href(&path));
+                            }
                         }
                     }
                 }
