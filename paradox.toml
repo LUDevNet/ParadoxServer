@@ -6,3 +6,4 @@ base = "explorer"
 [data]
 cdclient = "../cdclient.fdb"
 explorer_spa = "../../explorer/docs"
+locale = "../../install/ulcdr/locale/locale.xml"

@@ -1,236 +1,37 @@
-use std::{
-    convert::{Infallible, TryFrom},
-    fs::File,
-    path::PathBuf,
-};
+use std::{borrow::Cow, fs::File, sync::Arc};
 
-use assembly_data::fdb::{
-    common::{Latin1Str, Latin1String, ValueType},
-    file::FDBHeader,
-    mem, query,
-    ro::{ArcHandle, Handle},
-};
+use api::make_api;
+use assembly_data::{fdb::mem::Database, xml::localization::load_locale};
 use color_eyre::eyre::WrapErr;
-use linked_hash_map::LinkedHashMap;
+use config::{Config, Options};
+use handlebars::Handlebars;
 use mapr::Mmap;
-use serde::Deserialize;
+use regex::{Captures, Regex};
 use structopt::StructOpt;
-use warp::{
-    reply::{Json, WithStatus},
-    Filter, Rejection, Reply,
-};
+use template::make_spa_dynamic;
+use warp::Filter;
 
-fn default_port() -> u16 {
-    3030
-}
+mod api;
+mod config;
+mod template;
 
-#[derive(Deserialize)]
-struct CorsOptions {
-    all: bool,
-    domains: Vec<String>,
-}
-
-impl Default for CorsOptions {
-    fn default() -> Self {
-        Self {
-            all: true,
-            domains: vec![],
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct GeneralOptions {
-    /// The port for the server
-    #[serde(default = "default_port")]
-    port: u16,
-    /// Bind to `0.0.0.0` instead of `127.0.0.1`
-    public: bool,
-    /// The allowed cross-origin domains
-    #[serde(default)]
-    cors: CorsOptions,
-    /// The base of the path
-    base: String,
-}
-
-#[derive(Deserialize)]
-struct TlsOptions {
-    /// Whether TLS is enabled
-    enabled: bool,
-    /// The private key file
-    key: PathBuf,
-    /// The certificate file
-    cert: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct DataOptions {
-    /// The CDClient database FDB file
-    cdclient: PathBuf,
-    /// The lu-explorer static files
-    explorer_spa: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct Config {
-    general: GeneralOptions,
-    tls: Option<TlsOptions>,
-    data: DataOptions,
-}
-
-#[derive(StructOpt)]
-/// Starts the server that serves a JSON API to the client files
-struct Options {
-    #[structopt(long, default_value = "paradox.toml")]
-    cfg: PathBuf,
-}
-
-fn table_index(db_table: Handle<'_, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
-    let table = db_table.into_table_by_name(lname).unwrap();
-
-    if let Some(table) = table.transpose() {
-        let table_def = table.into_definition().unwrap();
-        let table_data = table.into_data().unwrap();
-
-        let mut cols = table_def.column_header_list().unwrap();
-        let index_col = cols.next().unwrap();
-        let index_type = ValueType::try_from(index_col.raw().column_data_type).unwrap();
-        let index_name = index_col.column_name().unwrap().raw().decode();
-
-        if let Ok(pk_filter) = query::pk_filter(key, index_type) {
-            let bucket_index = pk_filter.hash() % table_data.raw().buckets.count;
-            let mut buckets = table_data.bucket_header_list().unwrap();
-            let bucket = buckets.nth(bucket_index as usize).unwrap();
-
-            let mut rows = Vec::new();
-            for row_header in bucket.row_header_iter() {
-                let row_header = row_header.unwrap();
-
-                let mut field_iter = row_header.field_data_list().unwrap();
-                let index_field = field_iter.next().unwrap();
-                let index_value = index_field.try_get_value().unwrap();
-                let index_mem = mem::Field::try_from(index_value).unwrap();
-
-                if !pk_filter.filter(&index_mem) {
-                    continue;
-                }
-
-                let mut row = LinkedHashMap::new();
-                row.insert(index_name.clone(), index_mem);
-                // add the remaining fields
-                #[allow(clippy::clone_on_copy)]
-                for col in cols.clone() {
-                    let col_name = col.column_name().unwrap().raw().decode();
-                    let field = field_iter.next().unwrap();
-                    let value = field.try_get_value().unwrap();
-                    let mem_val = mem::Field::try_from(value).unwrap();
-                    row.insert(col_name, mem_val);
-                }
-                rows.push(row);
-            }
-
-            return warp::reply::json(&rows);
-        }
-    }
-    warp::reply::json(&())
-}
-
-fn tables_api<B: AsRef<[u8]>>(db: ArcHandle<B, FDBHeader>) -> WithStatus<Json> {
-    let db = db.as_bytes_handle();
-
-    let mut list = Vec::with_capacity(db.raw().tables.count as usize);
-    let header_list = db.table_header_list().unwrap();
-    for tbl in header_list {
-        let def = tbl.into_definition().unwrap();
-        let name = *def.table_name().unwrap().raw();
-        list.push(name);
-    }
-    let reply = warp::reply::json(&list);
-    warp::reply::with_status(reply, warp::http::StatusCode::OK)
-}
-
-fn table_def_api<B: AsRef<[u8]>>(
-    db_table: ArcHandle<B, FDBHeader>,
-    name: String,
-) -> WithStatus<Json> {
-    let lname = Latin1String::encode(&name);
-    let db_table = db_table.as_bytes_handle();
-    let table = db_table.into_table_by_name(lname.as_ref()).unwrap();
-
-    if let Some(table) = table.transpose() {
-        let table_def = table.into_definition().unwrap();
-        return wrap_200(warp::reply::json(&table_def));
-    }
-    wrap_404(warp::reply::json(&()))
-}
-
-fn table_key_api<B: AsRef<[u8]>>(
-    db_table: ArcHandle<B, FDBHeader>,
-    name: String,
-    key: String,
-) -> WithStatus<Json> {
-    let lname = Latin1String::encode(&name);
-    let db_table = db_table.as_bytes_handle();
-
-    wrap_200(table_index(db_table, lname.as_ref(), key))
-}
-
-fn wrap_404<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::NOT_FOUND)
-}
-
-fn wrap_200<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::OK)
-}
-
-fn make_api_catch_all() -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone
-{
-    warp::any().map(|| warp::reply::json(&404)).map(wrap_404)
-}
-
-fn make_v0() -> impl Filter<Extract = (), Error = Rejection> + Clone {
-    warp::path("v0")
-}
-
-fn make_tables<B>(
-    hnd: ArcHandle<B, FDBHeader>,
-) -> impl Filter<Extract = (ArcHandle<B, FDBHeader>,), Error = Infallible> + Clone + Send
-where
-    B: AsRef<[u8]> + Send + Sync,
-{
-    warp::any().map(move || hnd.clone())
-}
-
-fn make_api_tables<B, H>(
-    hnd_state: H,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Rejection> + Clone + Send
-where
-    B: AsRef<[u8]> + Send + Sync,
-    H: Filter<Extract = (ArcHandle<B, FDBHeader>,), Error = Infallible> + Clone + Send,
-{
-    let tables_base = hnd_state;
-
-    // The `/tables` endpoint
-    let tables = tables_base.clone().and(warp::path::end()).map(tables_api);
-    let table = tables_base.and(warp::path::param());
-
-    // The `/tables/:name/def` endpoint
-    let table_def = table.clone().and(warp::path("def")).map(table_def_api);
-    // The `/tables/:name/:key` endpoint
-    let table_get = table.and(warp::path::param()).map(table_key_api);
-
-    tables.or(table_def).unify().or(table_get).unify()
-}
-
-fn make_api<B: AsRef<[u8]> + Send + Sync>(
-    hnd: ArcHandle<B, FDBHeader>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone {
-    let api_base = make_v0();
-    let hnd_state = make_tables(hnd);
-    let tables = warp::path("tables").and(make_api_tables(hnd_state));
-    let catch_all = make_api_catch_all();
-
-    api_base.and(tables).or(catch_all).unify()
+fn make_meta_template(text: &str) -> Cow<str> {
+    let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
+    re.replace_all(text, |cap: &Captures| {
+        let kind = &cap[1];
+        let name = &cap[2];
+        let value = match name {
+            "twitter:title" | "og:title" => "{{title}}",
+            "twitter:description" | "og:description" => "{{description}}",
+            "twitter:image" | "og:image" => "{{image}}",
+            "og:url" => "{{url}}",
+            "og:type" => "{{type}}",
+            "twitter:card" => "{{card}}",
+            "twitter:site" => "{{site}}",
+            _ => &cap[3],
+        };
+        format!("<meta {}=\"{}\" content=\"{}\">", kind, name, value)
+    })
 }
 
 #[tokio::main]
@@ -252,15 +53,40 @@ async fn main() -> color_eyre::Result<()> {
             cfg.data.cdclient.display()
         )
     })?;
-    let hnd = ArcHandle::new_arc(unsafe { Mmap::map(&file)? });
-    let hnd = hnd.into_tables()?;
+
+    // Load the database
+    let mmap = unsafe { Mmap::map(&file)? };
+    // We want to keep this mapped until the end of the program!
+    let mref: &'static Mmap = Box::leak(Box::new(mmap));
+    let buf: &'static [u8] = mref.as_ref();
+    let db = Database::new(buf);
+
+    // Load the locale
+    let locale_root = load_locale(&cfg.data.locale)?;
+    let lr = Arc::new(locale_root);
 
     let base = warp::path(cfg.general.base);
-    let api = warp::path("api").and(make_api(hnd));
+    let api = warp::path("api").and(make_api(db, lr.clone()));
 
     let spa_path = cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
-    let spa = warp::fs::dir(spa_path).or(warp::fs::file(spa_index));
+
+    let index_text = std::fs::read_to_string(&spa_index)?;
+    let index_tpl_str = make_meta_template(&index_text);
+
+    let mut hb = Handlebars::new();
+    // register the template
+    hb.register_template_string("template.html", index_tpl_str)?;
+
+    // Turn Handlebars instance into a Filter so we can combine it
+    // easily with others...
+    let hb = Arc::new(hb);
+
+    let lu_res_prefix = Box::leak(cfg.data.lu_res_prefix.clone().into_boxed_str());
+    let spa_dynamic = make_spa_dynamic(lu_res_prefix, lr, db, hb);
+
+    //let spa_file = warp::fs::file(spa_index);
+    let spa = warp::fs::dir(spa_path).or(spa_dynamic);
 
     let routes = warp::get().and(base).and(api.or(spa));
 

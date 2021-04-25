@@ -5,10 +5,12 @@ authors = ["Xiphoseer <xiphoseer@mailbox.org>"]
 edition = "2018"
 
 [dependencies]
+handlebars = "3.5"
 pretty_env_logger = "0.4.0"
 structopt = "0.3.21"
 color-eyre = "0.5.10"
 mapr = "0.8.0"
+regex = "1.4"
 toml = "0.5"
 
 [dependencies.warp]
@@ -18,6 +20,10 @@ features = ["tls"]
 [dependencies.assembly-data]
 version = "0.3.0-beta.0"
 path = "../assembly/modules/data"
+
+[dependencies.assembly-core]
+version = "0.2.0"
+path = "../assembly/modules/core"
 
 [dependencies.linked-hash-map]
 version = "0.5.3"
