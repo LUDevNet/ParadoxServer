@@ -82,17 +82,54 @@ impl<'db> IconsTable<'db> {
 struct MissionsTable<'db> {
     inner: Table<'db>,
     col_mission_icon_id: usize,
+    col_is_mission: usize,
 }
 
 impl<'db> MissionsTable<'db> {
     fn new(inner: Table<'db>) -> Self {
-        let col_mission_icon_id = inner
-            .column_iter()
-            .position(|c| c.name_raw().as_bytes() == b"missionIconID")
-            .unwrap();
+        let mut mission_icon_id = None;
+        let mut is_mission = None;
+
+        for (index, col) in inner.column_iter().enumerate() {
+            match col.name_raw().as_bytes() {
+                b"isMission" => is_mission = Some(index),
+                b"missionIconID" => mission_icon_id = Some(index),
+                _ => continue,
+            }
+        }
+
         Self {
             inner,
-            col_mission_icon_id,
+            col_mission_icon_id: mission_icon_id.unwrap(),
+            col_is_mission: is_mission.unwrap(),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct MissionTasksTable<'db> {
+    inner: Table<'db>,
+    col_icon_id: usize,
+    col_uid: usize,
+}
+
+impl<'db> MissionTasksTable<'db> {
+    fn new(inner: Table<'db>) -> Self {
+        let mut icon_id = None;
+        let mut uid = None;
+
+        for (index, col) in inner.column_iter().enumerate() {
+            match col.name_raw().as_bytes() {
+                b"IconID" => icon_id = Some(index),
+                b"uid" => uid = Some(index),
+                _ => continue,
+            }
+        }
+
+        Self {
+            inner,
+            col_icon_id: icon_id.unwrap(),
+            col_uid: uid.unwrap(),
         }
     }
 }
@@ -104,8 +141,10 @@ struct TypedDatabase<'db> {
     lu_res_prefix: &'db str,
     /// Icons
     icons: IconsTable<'db>,
-    /// Objects
+    /// Missions
     missions: MissionsTable<'db>,
+    /// MissionTasks
+    mission_tasks: MissionTasksTable<'db>,
     /// Objects
     objects: Table<'db>,
     /// ComponentRegistry
@@ -117,6 +156,19 @@ struct TypedDatabase<'db> {
 #[derive(Default)]
 struct Mission {
     mission_icon_id: Option<i32>,
+    is_mission: bool,
+}
+
+#[derive(Default)]
+struct MissionTask {
+    icon_id: Option<i32>,
+    uid: i32,
+}
+
+#[derive(Debug, Copy, Clone)]
+enum MissionKind {
+    Achievement,
+    Mission,
 }
 
 fn is_not_empty(s: &&Latin1Str) -> bool {
@@ -144,16 +196,13 @@ fn cleanup_path(url: &Latin1Str) -> Option<PathBuf> {
 }
 
 impl TypedDatabase<'_> {
-    fn get_mission_name_desc(&self, id: i32) -> Option<(String, String)> {
+    fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {
         let missions = self.locale.str_children.get("Missions").unwrap();
         if id > 0 {
             if let Some(mission) = missions.int_children.get(&(id as u32)) {
                 if let Some(name_node) = mission.str_children.get("name") {
                     let name = name_node.value.as_ref().unwrap();
-                    return Some((
-                        format!("{} | Mission #{} | LU-Explorer", name, id),
-                        "TODO".to_string(),
-                    ));
+                    return Some(format!("{} | {:?} #{} | LU-Explorer", name, kind, id));
                 }
             }
         }
@@ -192,11 +241,44 @@ impl TypedDatabase<'_> {
                     .field_at(self.missions.col_mission_icon_id)
                     .unwrap()
                     .into_opt_integer();
+                let is_mission = row
+                    .field_at(self.missions.col_is_mission)
+                    .unwrap()
+                    .into_opt_boolean()
+                    .unwrap_or(true);
 
-                return Some(Mission { mission_icon_id });
+                return Some(Mission {
+                    mission_icon_id,
+                    is_mission,
+                });
             }
         }
         None
+    }
+
+    fn get_mission_tasks(&self, id: i32) -> Vec<MissionTask> {
+        let hash = u32::from_ne_bytes(id.to_ne_bytes());
+        let bucket = self.mission_tasks.inner.bucket_for_hash(hash);
+        let mut tasks = Vec::with_capacity(4);
+
+        for row in bucket.row_iter() {
+            let id_field = row.field_at(0).unwrap();
+
+            if id_field == Value::Integer(id) {
+                let icon_id = row
+                    .field_at(self.mission_tasks.col_icon_id)
+                    .unwrap()
+                    .into_opt_integer();
+                let uid = row
+                    .field_at(self.mission_tasks.col_uid)
+                    .unwrap()
+                    .into_opt_integer()
+                    .unwrap();
+
+                tasks.push(MissionTask { icon_id, uid })
+            }
+        }
+        tasks
     }
 
     fn get_object_name_desc(&self, id: i32) -> Option<(String, String)> {
@@ -368,24 +450,55 @@ fn meta(
     let mission_get =
         base.and(warp::path::param::<i32>())
             .map(move |data: TypedDatabase<'_>, id: i32| {
-                let mut image = Cow::Borrowed(default_img);
+                let mut image = None;
+                let mut kind = MissionKind::Mission;
                 if let Some(mission) = data.get_mission_data(id) {
+                    if !mission.is_mission {
+                        kind = MissionKind::Achievement;
+                    }
                     if let Some(icon_id) = mission.mission_icon_id {
                         if let Some(path) = data.get_icon_path(icon_id) {
-                            image = Cow::Owned(data.to_res_href(&path));
+                            image = Some(data.to_res_href(&path));
                         }
                     }
                 }
 
-                let (title, description) = data.get_mission_name_desc(id).unwrap_or((
-                    format!("Missing Mission #{} | LU-Explorer", id),
-                    String::new(),
-                ));
+                let mut desc = String::new();
+
+                let tasks = data.get_mission_tasks(id);
+                let tasks_locale = data.locale.str_children.get("MissionTasks").unwrap();
+                for task in tasks {
+                    if image == None {
+                        if let Some(icon_id) = task.icon_id {
+                            if let Some(path) = data.get_icon_path(icon_id) {
+                                image = Some(data.to_res_href(&path));
+                            }
+                        }
+                    }
+                    if task.uid > 0 {
+                        if let Some(node) = tasks_locale.int_children.get(&(task.uid as u32)) {
+                            if let Some(node) = node.str_children.get("description") {
+                                if let Some(string) = &node.value {
+                                    desc.push_str("- ");
+                                    desc.push_str(string);
+                                    desc.push('\n');
+                                }
+                            }
+                        }
+                    }
+                }
+                if desc.ends_with('\n') {
+                    desc.pop();
+                }
+
+                let title = data
+                    .get_mission_name(kind, id)
+                    .unwrap_or(format!("Missing {:?} #{} | LU-Explorer", kind, id));
 
                 Meta {
                     title: Cow::Owned(title),
-                    description: Cow::Owned(description),
-                    image,
+                    description: Cow::Owned(desc),
+                    image: image.map(Cow::Owned).unwrap_or(Cow::Borrowed(default_img)),
                 }
             });
     let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
@@ -420,6 +533,7 @@ pub fn make_spa_dynamic<'r>(
         lu_res_prefix,
         icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
         missions: MissionsTable::new(tables.by_name("Missions").unwrap().unwrap()),
+        mission_tasks: MissionTasksTable::new(tables.by_name("MissionTasks").unwrap().unwrap()),
         objects: tables.by_name("Objects").unwrap().unwrap(),
         comp_reg: tables.by_name("ComponentsRegistry").unwrap().unwrap(),
         render_comp: tables.by_name("RenderComponent").unwrap().unwrap(),
