@@ -1,4 +1,4 @@
-use std::{borrow::Cow, convert::Infallible, sync::Arc};
+use std::{borrow::Cow, convert::Infallible, fmt::Write, sync::Arc};
 
 use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use handlebars::Handlebars;
@@ -20,6 +20,109 @@ where
     warp::reply::html(render)
 }
 
+/// Retrieve metadata for /missions/:id
+fn mission_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
+    let mut image = None;
+    let mut kind = MissionKind::Mission;
+    if let Some(mission) = data.get_mission_data(id) {
+        if !mission.is_mission {
+            kind = MissionKind::Achievement;
+            if let Some(icon_id) = mission.mission_icon_id {
+                if let Some(path) = data.get_icon_path(icon_id) {
+                    image = Some(data.to_res_href(&path));
+                }
+            }
+        }
+    }
+
+    let mut desc = String::new();
+
+    let tasks = data.get_mission_tasks(id);
+    let tasks_locale = data.locale.str_children.get("MissionTasks").unwrap();
+    for task in tasks {
+        if image == None {
+            if let Some(icon_id) = task.icon_id {
+                if let Some(path) = data.get_icon_path(icon_id) {
+                    image = Some(data.to_res_href(&path));
+                }
+            }
+        }
+        if task.uid > 0 {
+            if let Some(node) = tasks_locale.int_children.get(&(task.uid as u32)) {
+                if let Some(node) = node.str_children.get("description") {
+                    if let Some(string) = &node.value {
+                        desc.push_str("- ");
+                        desc.push_str(string);
+                        desc.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    if desc.ends_with('\n') {
+        desc.pop();
+    }
+
+    let title = data
+        .get_mission_name(kind, id)
+        .unwrap_or(format!("Missing {:?} #{}", kind, id));
+
+    Meta {
+        title: Cow::Owned(title),
+        description: Cow::Owned(desc),
+        image,
+    }
+}
+
+/// Retrieve metadata for /objects/:id
+fn object_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
+    let (title, description) = data
+        .get_object_name_desc(id)
+        .unwrap_or((format!("Missing Object #{}", id), String::new()));
+    let comp = data.get_components(id);
+    let image = comp.render.and_then(|id| data.get_render_image(id));
+    Meta {
+        title: Cow::Owned(title),
+        description: Cow::Owned(description),
+        image,
+    }
+}
+
+/// Retrieve metadata for /objects/item-sets/:id
+fn item_set_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
+    let mut rank = 0;
+    let mut image = None;
+    let mut desc = String::new();
+    if let Some(item_set) = data.item_sets.get_data(id) {
+        rank = item_set.kit_rank;
+        if let Some(image_id) = item_set.kit_image {
+            if let Some(path) = data.get_icon_path(image_id) {
+                image = Some(data.to_res_href(&path));
+            }
+        }
+
+        for item_id in item_set.item_ids {
+            if let Some((name, _)) = data.get_object_name_desc(item_id) {
+                writeln!(desc, "- {}", name).unwrap();
+            }
+        }
+    }
+
+    if desc.ends_with('\n') {
+        desc.pop();
+    }
+
+    let title = data
+        .get_item_set_name(rank, id)
+        .unwrap_or(format!("Unnamed Item Set #{}", id));
+
+    Meta {
+        title: Cow::Owned(title),
+        description: Cow::Owned(desc),
+        image,
+    }
+}
+
 #[derive(Serialize)]
 pub struct IndexParams {
     pub title: Cow<'static, str>,
@@ -35,122 +138,62 @@ static DEFAULT_IMG: &str = "/ui/ingame/freetrialcongratulations_id.png";
 
 mod typed_db;
 
-use typed_db::{IconsTable, MissionKind, MissionTasksTable, MissionsTable, TypedDatabase};
+use typed_db::{
+    IconsTable, ItemSetsTable, MissionKind, MissionTasksTable, MissionsTable, TypedDatabase,
+};
 
 #[derive(Debug, Clone)]
 struct Meta {
     title: Cow<'static, str>,
     description: Cow<'static, str>,
-    image: Cow<'static, str>,
+    image: Option<String>,
 }
 
 fn meta(
     data: TypedDatabase<'_>,
 ) -> impl Filter<Extract = (Meta,), Error = Infallible> + Clone + '_ {
-    let mut default_img = data.lu_res_prefix.to_owned();
-    default_img.push_str(DEFAULT_IMG);
-    let default_img: &'static str = Box::leak(default_img.into_boxed_str());
-
     let base = warp::any().map(move || data.clone());
 
-    let dashboard = warp::path("dashboard")
-        .and(warp::path::end())
-        .map(move || Meta {
-            title: Cow::Borrowed("Dashboard"),
-            description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
-            image: Cow::Borrowed(default_img),
-        });
+    let dashboard = warp::path("dashboard").and(warp::path::end()).map(|| Meta {
+        title: Cow::Borrowed("Dashboard"),
+        description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
+        image: None,
+    });
 
-    let objects_end = warp::path::end().map(move || Meta {
+    let objects_end = warp::path::end().map(|| Meta {
         title: Cow::Borrowed("Objects"),
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
-        image: Cow::Borrowed(default_img),
+        image: None,
     });
-    let object_get = base.clone().and(warp::path::param::<i32>()).map(
-        move |data: TypedDatabase<'_>, id: i32| {
-            let (title, description) = data
-                .get_object_name_desc(id)
-                .unwrap_or((format!("Missing Object #{}", id), String::new()));
-            let comp = data.get_components(id);
-            let image = comp
-                .render
-                .and_then(|id| data.get_render_image(id))
-                .map(Cow::Owned)
-                .unwrap_or(Cow::Borrowed(default_img));
-            Meta {
-                title: Cow::Owned(title),
-                description: Cow::Owned(description),
-                image,
-            }
-        },
-    );
-    let objects = warp::path("objects").and(objects_end.or(object_get).unify());
+    let object_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(object_get_api);
+    let item_sets_end = warp::path::end().map(|| Meta {
+        title: Cow::Borrowed("Item Sets"),
+        description: Cow::Borrowed("Check out the LEGO Universe Objects"),
+        image: None,
+    });
+    let item_set_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(item_set_get_api);
+    let item_sets = warp::path("item-sets").and(item_sets_end.or(item_set_get).unify());
+    let objects =
+        warp::path("objects").and(objects_end.or(object_get).unify().or(item_sets).unify());
 
     let missions_end = warp::path::end().map(move || Meta {
         title: Cow::Borrowed("Missions"),
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
-        image: Cow::Borrowed(default_img),
+        image: None,
     });
-    let mission_get =
-        base.and(warp::path::param::<i32>())
-            .map(move |data: TypedDatabase<'_>, id: i32| {
-                let mut image = None;
-                let mut kind = MissionKind::Mission;
-                if let Some(mission) = data.get_mission_data(id) {
-                    if !mission.is_mission {
-                        kind = MissionKind::Achievement;
-                        if let Some(icon_id) = mission.mission_icon_id {
-                            if let Some(path) = data.get_icon_path(icon_id) {
-                                image = Some(data.to_res_href(&path));
-                            }
-                        }
-                    }
-                }
-
-                let mut desc = String::new();
-
-                let tasks = data.get_mission_tasks(id);
-                let tasks_locale = data.locale.str_children.get("MissionTasks").unwrap();
-                for task in tasks {
-                    if image == None {
-                        if let Some(icon_id) = task.icon_id {
-                            if let Some(path) = data.get_icon_path(icon_id) {
-                                image = Some(data.to_res_href(&path));
-                            }
-                        }
-                    }
-                    if task.uid > 0 {
-                        if let Some(node) = tasks_locale.int_children.get(&(task.uid as u32)) {
-                            if let Some(node) = node.str_children.get("description") {
-                                if let Some(string) = &node.value {
-                                    desc.push_str("- ");
-                                    desc.push_str(string);
-                                    desc.push('\n');
-                                }
-                            }
-                        }
-                    }
-                }
-                if desc.ends_with('\n') {
-                    desc.pop();
-                }
-
-                let title = data
-                    .get_mission_name(kind, id)
-                    .unwrap_or(format!("Missing {:?} #{}", kind, id));
-
-                Meta {
-                    title: Cow::Owned(title),
-                    description: Cow::Owned(desc),
-                    image: image.map(Cow::Owned).unwrap_or(Cow::Borrowed(default_img)),
-                }
-            });
+    let mission_get = base.and(warp::path::param::<i32>()).map(mission_get_impl);
     let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
 
     let catch = warp::any().map(move || Meta {
         title: Cow::Borrowed("LU-Explorer"),
         description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
-        image: Cow::Borrowed(default_img),
+        image: None,
     });
     objects
         .or(missions)
@@ -176,6 +219,7 @@ pub fn make_spa_dynamic<'r>(
         locale: lr,
         lu_res_prefix,
         icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
+        item_sets: ItemSetsTable::new(tables.by_name("ItemSets").unwrap().unwrap()),
         missions: MissionsTable::new(tables.by_name("Missions").unwrap().unwrap()),
         mission_tasks: MissionTasksTable::new(tables.by_name("MissionTasks").unwrap().unwrap()),
         objects: tables.by_name("Objects").unwrap().unwrap(),
@@ -183,13 +227,18 @@ pub fn make_spa_dynamic<'r>(
         render_comp: tables.by_name("RenderComponent").unwrap().unwrap(),
     };
 
+    // Prepare the default image
+    let mut default_img = data.lu_res_prefix.to_owned();
+    default_img.push_str(DEFAULT_IMG);
+    let default_img: &'static str = Box::leak(default_img.into_boxed_str());
+
     // Create a reusable closure to render template
     let handlebars = move |with_template| render(with_template, hb.clone());
 
     warp::any()
         .and(meta(data))
         .and(warp::path::full())
-        .map(|meta: Meta, full_path: FullPath| WithTemplate {
+        .map(move |meta: Meta, full_path: FullPath| WithTemplate {
             name: "template.html",
             value: IndexParams {
                 title: meta.title,
@@ -197,7 +246,10 @@ pub fn make_spa_dynamic<'r>(
                 card: "summary",
                 description: meta.description,
                 site: Cow::Borrowed("@lu_explorer"),
-                image: meta.image,
+                image: meta
+                    .image
+                    .map(Cow::Owned)
+                    .unwrap_or(Cow::Borrowed(default_img)),
                 url: Cow::Owned(format!("https://lu.lcdruniverse.org{}", full_path.as_str())),
             },
         })

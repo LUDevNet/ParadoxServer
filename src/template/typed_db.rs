@@ -46,6 +46,88 @@ impl<'db> IconsTable<'db> {
 }
 
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
+pub(super) struct ItemSetsTable<'db> {
+    pub inner: Table<'db>,
+    /// itemIDs: ", " separated LOTs
+    col_item_ids: usize,
+    /// kitType i.e. faction
+    col_kit_type: usize,
+    /// kitRank
+    col_kit_rank: usize,
+    /// kitImage
+    col_kit_image: usize,
+}
+
+impl<'db> ItemSetsTable<'db> {
+    pub(super) fn new(inner: Table<'db>) -> Self {
+        let mut item_ids = None;
+        let mut kit_type = None;
+        let mut kit_rank = None;
+        let mut kit_image = None;
+
+        for (index, col) in inner.column_iter().enumerate() {
+            match col.name_raw().as_bytes() {
+                b"itemIDs" => item_ids = Some(index),
+                b"kitType" => kit_type = Some(index),
+                b"kitRank" => kit_rank = Some(index),
+                b"kitImage" => kit_image = Some(index),
+                _ => {}
+            }
+        }
+
+        Self {
+            inner,
+            col_item_ids: item_ids.unwrap(),
+            col_kit_type: kit_type.unwrap(),
+            col_kit_rank: kit_rank.unwrap(),
+            col_kit_image: kit_image.unwrap(),
+        }
+    }
+
+    pub(super) fn get_data(&self, id: i32) -> Option<ItemSet> {
+        let hash = u32::from_ne_bytes(id.to_ne_bytes());
+        let bucket = self.inner.bucket_for_hash(hash);
+
+        for row in bucket.row_iter() {
+            let id_field = row.field_at(0).unwrap();
+
+            if id_field == Value::Integer(id) {
+                let kit_type = row
+                    .field_at(self.col_kit_type)
+                    .unwrap()
+                    .into_opt_integer()
+                    .unwrap();
+                let kit_rank = row
+                    .field_at(self.col_kit_rank)
+                    .unwrap()
+                    .into_opt_integer()
+                    .unwrap_or(0);
+                let kit_image = row.field_at(self.col_kit_image).unwrap().into_opt_integer();
+                let item_ids = row
+                    .field_at(self.col_item_ids)
+                    .unwrap()
+                    .into_opt_text()
+                    .unwrap()
+                    .decode()
+                    .split(',')
+                    .map(str::trim)
+                    .filter_map(|idstr| idstr.parse::<i32>().ok())
+                    .collect();
+
+                return Some(ItemSet {
+                    kit_type,
+                    kit_rank,
+                    kit_image,
+                    item_ids,
+                });
+            }
+        }
+        None
+    }
+}
+
+#[derive(Copy, Clone)]
 pub(super) struct MissionsTable<'db> {
     inner: Table<'db>,
     col_mission_icon_id: usize,
@@ -108,6 +190,8 @@ pub(super) struct TypedDatabase<'db> {
     pub(super) lu_res_prefix: &'db str,
     /// Icons
     pub(super) icons: IconsTable<'db>,
+    /// ItemSets
+    pub(super) item_sets: ItemSetsTable<'db>,
     /// Missions
     pub(super) missions: MissionsTable<'db>,
     /// MissionTasks
@@ -118,6 +202,14 @@ pub(super) struct TypedDatabase<'db> {
     pub(super) comp_reg: Table<'db>,
     /// RenderComponent
     pub(super) render_comp: Table<'db>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemSet {
+    pub item_ids: Vec<i32>,
+    pub kit_type: i32,
+    pub kit_rank: i32,
+    pub kit_image: Option<i32>,
 }
 
 #[derive(Default)]
@@ -170,6 +262,23 @@ impl TypedDatabase<'_> {
                 if let Some(name_node) = mission.str_children.get("name") {
                     let name = name_node.value.as_ref().unwrap();
                     return Some(format!("{} | {:?} #{}", name, kind, id));
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn get_item_set_name(&self, rank: i32, id: i32) -> Option<String> {
+        let missions = self.locale.str_children.get("ItemSets").unwrap();
+        if id > 0 {
+            if let Some(mission) = missions.int_children.get(&(id as u32)) {
+                if let Some(name_node) = mission.str_children.get("kitName") {
+                    let name = name_node.value.as_ref().unwrap();
+                    return Some(if rank > 0 {
+                        format!("{} (Rank {}) | Item Set #{}", name, rank, id)
+                    } else {
+                        format!("{} | Item Set #{}", name, id)
+                    });
                 }
             }
         }
