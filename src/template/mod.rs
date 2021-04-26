@@ -89,7 +89,7 @@ fn object_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /objects/item-sets/:id
-fn item_set_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
+fn item_set_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
     let mut rank = 0;
     let mut image = None;
     let mut desc = String::new();
@@ -123,6 +123,32 @@ fn item_set_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
     }
 }
 
+/// Retrieve metadata for /skills/:id
+fn skill_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
+    let (mut title, description) = data.get_skill_name_desc(id);
+    let description = description.map(Cow::Owned).unwrap_or(Cow::Borrowed(""));
+    let mut image = None;
+
+    if let Some(skill) = data.skills.get_data(id) {
+        if title.is_none() {
+            title = Some(format!("Skill #{}", id))
+        }
+        if let Some(icon_id) = skill.skill_icon {
+            if let Some(path) = data.get_icon_path(icon_id) {
+                image = Some(data.to_res_href(&path));
+            }
+        }
+    }
+
+    let title = title.unwrap_or(format!("Missing Skill #{}", id));
+
+    Meta {
+        title: Cow::Owned(title),
+        description,
+        image,
+    }
+}
+
 #[derive(Serialize)]
 pub struct IndexParams {
     pub title: Cow<'static, str>,
@@ -138,9 +164,7 @@ static DEFAULT_IMG: &str = "/ui/ingame/freetrialcongratulations_id.png";
 
 mod typed_db;
 
-use typed_db::{
-    IconsTable, ItemSetsTable, MissionKind, MissionTasksTable, MissionsTable, TypedDatabase,
-};
+use typed_db::{MissionKind, TypedDatabase};
 
 #[derive(Debug, Clone)]
 struct Meta {
@@ -177,7 +201,7 @@ fn meta(
     let item_set_get = base
         .clone()
         .and(warp::path::param::<i32>())
-        .map(item_set_get_api);
+        .map(item_set_get_impl);
     let item_sets = warp::path("item-sets").and(item_sets_end.or(item_set_get).unify());
     let objects =
         warp::path("objects").and(objects_end.or(object_get).unify().or(item_sets).unify());
@@ -187,8 +211,19 @@ fn meta(
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
         image: None,
     });
-    let mission_get = base.and(warp::path::param::<i32>()).map(mission_get_impl);
+    let mission_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(mission_get_impl);
     let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
+
+    let skills_end = warp::path::end().map(move || Meta {
+        title: Cow::Borrowed("Skills"),
+        description: Cow::Borrowed("Check out the LEGO Universe Missions"),
+        image: None,
+    });
+    let skill_get = base.and(warp::path::param::<i32>()).map(skill_get_impl);
+    let skills = warp::path("skills").and(skills_end.or(skill_get).unify());
 
     let catch = warp::any().map(move || Meta {
         title: Cow::Borrowed("LU-Explorer"),
@@ -199,6 +234,8 @@ fn meta(
         .or(missions)
         .unify()
         .or(dashboard)
+        .unify()
+        .or(skills)
         .unify()
         .or(catch)
         .unify()
@@ -215,17 +252,7 @@ pub fn make_spa_dynamic<'r>(
     // Find the objects table
     let tables = db.tables().unwrap();
 
-    let data = TypedDatabase {
-        locale: lr,
-        lu_res_prefix,
-        icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
-        item_sets: ItemSetsTable::new(tables.by_name("ItemSets").unwrap().unwrap()),
-        missions: MissionsTable::new(tables.by_name("Missions").unwrap().unwrap()),
-        mission_tasks: MissionTasksTable::new(tables.by_name("MissionTasks").unwrap().unwrap()),
-        objects: tables.by_name("Objects").unwrap().unwrap(),
-        comp_reg: tables.by_name("ComponentsRegistry").unwrap().unwrap(),
-        render_comp: tables.by_name("RenderComponent").unwrap().unwrap(),
-    };
+    let data = TypedDatabase::new(lr, lu_res_prefix, tables);
 
     // Prepare the default image
     let mut default_img = data.lu_res_prefix.to_owned();

@@ -6,7 +6,7 @@ use std::{
 use assembly_data::{
     fdb::{
         common::{Latin1Str, Value},
-        mem::Table,
+        mem::{Table, Tables},
     },
     xml::localization::LocaleNode,
 };
@@ -183,11 +183,61 @@ impl<'db> MissionTasksTable<'db> {
     }
 }
 
+#[derive(Copy, Clone)]
+pub struct SkillBehavior {
+    pub skill_icon: Option<i32>,
+}
+
+#[derive(Copy, Clone)]
+pub(super) struct SkillBehaviorTable<'db> {
+    inner: Table<'db>,
+    col_skill_icon: usize,
+}
+
+impl<'db> SkillBehaviorTable<'db> {
+    pub(super) fn new(inner: Table<'db>) -> Self {
+        let mut skill_icon = None;
+
+        for (index, col) in inner.column_iter().enumerate() {
+            match col.name_raw().as_bytes() {
+                b"skillIcon" => skill_icon = Some(index),
+                _ => continue,
+            }
+        }
+
+        Self {
+            inner,
+            col_skill_icon: skill_icon.unwrap(),
+        }
+    }
+
+    pub(super) fn get_data(&self, id: i32) -> Option<SkillBehavior> {
+        let hash = u32::from_ne_bytes(id.to_ne_bytes());
+        let bucket = self.inner.bucket_for_hash(hash);
+
+        for row in bucket.row_iter() {
+            let id_field = row.field_at(0).unwrap();
+
+            if id_field == Value::Integer(id) {
+                let skill_icon = row
+                    .field_at(self.col_skill_icon)
+                    .unwrap()
+                    .into_opt_integer();
+
+                return Some(SkillBehavior { skill_icon });
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct TypedDatabase<'db> {
     pub(super) locale: Arc<LocaleNode>,
     /// LU-Res Prefix
     pub(super) lu_res_prefix: &'db str,
+    /// ComponentRegistry
+    pub(super) comp_reg: Table<'db>,
     /// Icons
     pub(super) icons: IconsTable<'db>,
     /// ItemSets
@@ -198,10 +248,10 @@ pub(super) struct TypedDatabase<'db> {
     pub(super) mission_tasks: MissionTasksTable<'db>,
     /// Objects
     pub(super) objects: Table<'db>,
-    /// ComponentRegistry
-    pub(super) comp_reg: Table<'db>,
     /// RenderComponent
     pub(super) render_comp: Table<'db>,
+    /// SkillBehavior
+    pub(super) skills: SkillBehaviorTable<'db>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,7 +304,22 @@ fn cleanup_path(url: &Latin1Str) -> Option<PathBuf> {
     Some(path)
 }
 
-impl TypedDatabase<'_> {
+impl<'a> TypedDatabase<'a> {
+    pub(super) fn new(locale: Arc<LocaleNode>, lu_res_prefix: &'a str, tables: Tables<'a>) -> Self {
+        TypedDatabase {
+            locale,
+            lu_res_prefix,
+            comp_reg: tables.by_name("ComponentsRegistry").unwrap().unwrap(),
+            icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
+            item_sets: ItemSetsTable::new(tables.by_name("ItemSets").unwrap().unwrap()),
+            missions: MissionsTable::new(tables.by_name("Missions").unwrap().unwrap()),
+            mission_tasks: MissionTasksTable::new(tables.by_name("MissionTasks").unwrap().unwrap()),
+            objects: tables.by_name("Objects").unwrap().unwrap(),
+            render_comp: tables.by_name("RenderComponent").unwrap().unwrap(),
+            skills: SkillBehaviorTable::new(tables.by_name("SkillBehavior").unwrap().unwrap()),
+        }
+    }
+
     pub(super) fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {
         let missions = self.locale.str_children.get("Missions").unwrap();
         if id > 0 {
@@ -283,6 +348,25 @@ impl TypedDatabase<'_> {
             }
         }
         None
+    }
+
+    pub(super) fn get_skill_name_desc(&self, id: i32) -> (Option<String>, Option<String>) {
+        let skills = self.locale.str_children.get("SkillBehavior").unwrap();
+        let mut the_name = None;
+        let mut the_desc = None;
+        if id > 0 {
+            if let Some(skill) = skills.int_children.get(&(id as u32)) {
+                if let Some(name_node) = skill.str_children.get("name") {
+                    let name = name_node.value.as_ref().unwrap();
+                    the_name = Some(format!("{} | Item Set #{}", name, id));
+                }
+                if let Some(desc_node) = skill.str_children.get("descriptionUI") {
+                    let desc = desc_node.value.as_ref().unwrap();
+                    the_desc = Some(desc.clone());
+                }
+            }
+        }
+        (the_name, the_desc)
     }
 
     pub(super) fn get_icon_path(&self, id: i32) -> Option<PathBuf> {
