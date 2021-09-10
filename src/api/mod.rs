@@ -13,6 +13,12 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+use crate::typed_db::TypedDatabase;
+
+use self::rev_lookup::{make_api_rev, ReverseLookup};
+
+pub mod rev_lookup;
+
 /*fn table_index(db_table: Handle<'_, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
     let table = db_table.into_table_by_name(lname).unwrap();
 
@@ -233,9 +239,19 @@ fn make_api_tables(
     tables.or(table_def).unify().or(table_get).unify()
 }
 
+/*fn copy_filter<'x, T>(v: T) -> impl Filter<Extract = (T,), Error=Infallible> + Clone + 'x where T: Send + Sync + Copy + 'x {
+    warp::any().map(move || v)
+}*/
+
 fn db_filter<'db>(
     db: Database<'db>,
 ) -> impl Filter<Extract = (Database,), Error = Infallible> + Clone + 'db {
+    warp::any().map(move || db)
+}
+
+fn tydb_filter<'db>(
+    db: &'db TypedDatabase<'db>,
+) -> impl Filter<Extract = (&'db TypedDatabase<'db>,), Error = Infallible> + Clone + 'db {
     warp::any().map(move || db)
 }
 
@@ -246,10 +262,12 @@ struct LocalePod<'a> {
     str_keys: Vec<&'a str>,
 }
 
-pub fn make_api(
-    db: Database,
+pub(crate) fn make_api<'a>(
+    db: Database<'a>,
+    tydb: &'static TypedDatabase<'a>,
+    rev: &'static ReverseLookup,
     lr: Arc<LocaleNode>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + '_
+) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + 'a
 //where
 //    B: AsRef<[u8]> + Send + Sync + 'db,
 {
@@ -284,7 +302,9 @@ pub fn make_api(
             }))
         })
         .map(map_opt);
-    let v0 = v0_base.and(v0_tables.or(v0_locale).unify());
+
+    let v0_rev = warp::path("rev").and(make_api_rev(tydb, rev));
+    let v0 = v0_base.and(v0_tables.or(v0_locale).unify().or(v0_rev).unify());
 
     // v1
     let dbf = db_filter(db);

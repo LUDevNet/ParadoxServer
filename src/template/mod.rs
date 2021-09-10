@@ -1,6 +1,6 @@
 use std::{borrow::Cow, convert::Infallible, fmt::Write, sync::Arc};
 
-use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
+//use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use handlebars::Handlebars;
 use serde::Serialize;
 use warp::{path::FullPath, Filter};
@@ -21,7 +21,7 @@ where
 }
 
 /// Retrieve metadata for /missions/:id
-fn mission_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
+fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
     let mut image = None;
     let mut kind = MissionKind::Mission;
     if let Some(mission) = data.get_mission_data(id) {
@@ -75,7 +75,7 @@ fn mission_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /objects/:id
-fn object_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
+fn object_get_api(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
     let (title, description) = data
         .get_object_name_desc(id)
         .unwrap_or((format!("Missing Object #{}", id), String::new()));
@@ -89,7 +89,7 @@ fn object_get_api(data: TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /objects/item-sets/:id
-fn item_set_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
+fn item_set_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
     let mut rank = 0;
     let mut image = None;
     let mut desc = String::new();
@@ -124,7 +124,7 @@ fn item_set_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /skills/:id
-fn skill_get_impl(data: TypedDatabase<'_>, id: i32) -> Meta {
+fn skill_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
     let (mut title, description) = data.get_skill_name_desc(id);
     let description = description.map(Cow::Owned).unwrap_or(Cow::Borrowed(""));
     let mut image = None;
@@ -162,9 +162,7 @@ pub struct IndexParams {
 
 static DEFAULT_IMG: &str = "/ui/ingame/freetrialcongratulations_id.png";
 
-mod typed_db;
-
-use typed_db::{MissionKind, TypedDatabase};
+use crate::typed_db::{MissionKind, TypedDatabase};
 
 #[derive(Debug, Clone)]
 struct Meta {
@@ -173,10 +171,10 @@ struct Meta {
     image: Option<String>,
 }
 
-fn meta(
-    data: TypedDatabase<'_>,
-) -> impl Filter<Extract = (Meta,), Error = Infallible> + Clone + '_ {
-    let base = warp::any().map(move || data.clone());
+fn meta<'r>(
+    data: &'static TypedDatabase<'static>,
+) -> impl Filter<Extract = (Meta,), Error = Infallible> + Clone + 'r {
+    let base = warp::any().map(move || data);
 
     let dashboard = warp::path("dashboard").and(warp::path::end()).map(|| Meta {
         title: Cow::Borrowed("Dashboard"),
@@ -189,19 +187,13 @@ fn meta(
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
     });
-    let object_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(object_get_api);
+    let object_get = base.and(warp::path::param::<i32>()).map(object_get_api);
     let item_sets_end = warp::path::end().map(|| Meta {
         title: Cow::Borrowed("Item Sets"),
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
     });
-    let item_set_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(item_set_get_impl);
+    let item_set_get = base.and(warp::path::param::<i32>()).map(item_set_get_impl);
     let item_sets = warp::path("item-sets").and(item_sets_end.or(item_set_get).unify());
     let objects =
         warp::path("objects").and(objects_end.or(object_get).unify().or(item_sets).unify());
@@ -211,10 +203,7 @@ fn meta(
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
         image: None,
     });
-    let mission_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(mission_get_impl);
+    let mission_get = base.and(warp::path::param::<i32>()).map(mission_get_impl);
     let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
 
     let skills_end = warp::path::end().map(move || Meta {
@@ -242,18 +231,11 @@ fn meta(
 }
 
 #[allow(clippy::needless_lifetimes)] // false positive?
-pub fn make_spa_dynamic<'r>(
-    lu_res_prefix: &'r str,
-    lr: Arc<LocaleNode>,
-    db: Database<'r>,
+pub(crate) fn make_spa_dynamic<'r>(
+    data: &'static TypedDatabase<'static>,
     hb: Arc<Handlebars<'r>>,
     //    hnd: ArcHandle<B, FDBHeader>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Infallible> + Clone + 'r {
-    // Find the objects table
-    let tables = db.tables().unwrap();
-
-    let data = TypedDatabase::new(lr, lu_res_prefix, tables);
-
     // Prepare the default image
     let mut default_img = data.lu_res_prefix.to_owned();
     default_img.push_str(DEFAULT_IMG);

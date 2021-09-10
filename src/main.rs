@@ -13,7 +13,11 @@ use warp::Filter;
 
 mod api;
 mod config;
+mod data;
 mod template;
+pub(crate) mod typed_db;
+
+use crate::{api::rev_lookup::ReverseLookup, typed_db::TypedDatabase};
 
 fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
@@ -65,8 +69,19 @@ async fn main() -> color_eyre::Result<()> {
     let locale_root = load_locale(&cfg.data.locale)?;
     let lr = Arc::new(locale_root);
 
+    // Load the typed database
+    let tables = db.tables().unwrap();
+    let lu_res_prefix = Box::leak(cfg.data.lu_res_prefix.clone().into_boxed_str());
+    let data = Box::leak(Box::new(TypedDatabase::new(
+        lr.clone(),
+        lu_res_prefix,
+        tables,
+    )));
+    let rev = Box::leak(Box::new(ReverseLookup::new(data)));
+
+    // Make the API
     let base = warp::path(cfg.general.base);
-    let api = warp::path("api").and(make_api(db, lr.clone()));
+    let api = warp::path("api").and(make_api(db, data, rev, lr.clone()));
 
     let spa_path = cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
@@ -82,8 +97,7 @@ async fn main() -> color_eyre::Result<()> {
     // easily with others...
     let hb = Arc::new(hb);
 
-    let lu_res_prefix = Box::leak(cfg.data.lu_res_prefix.clone().into_boxed_str());
-    let spa_dynamic = make_spa_dynamic(lu_res_prefix, lr, db, hb);
+    let spa_dynamic = make_spa_dynamic(data, hb);
 
     //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path).or(spa_dynamic);

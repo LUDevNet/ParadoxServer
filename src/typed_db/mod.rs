@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomData,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -11,81 +12,130 @@ use assembly_data::{
     xml::localization::LocaleNode,
 };
 
+pub mod typed_rows;
+use serde::Serialize;
+use typed_rows::TypedRow;
+
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Components {
     pub render: Option<i32>,
 }
 
-#[derive(Copy, Clone)]
-pub(super) struct IconsTable<'db> {
-    pub inner: Table<'db>,
-    col_icon_path: usize,
-    #[allow(dead_code)]
-    col_icon_name: usize,
+pub(crate) trait TypedTable<'de> {
+    fn as_table(&self) -> Table<'de>;
+    fn new(inner: Table<'de>) -> Self;
 }
 
-impl<'db> IconsTable<'db> {
-    pub(super) fn new(inner: Table<'db>) -> Self {
-        let mut col_icon_path = None;
-        let mut col_icon_name = None;
+macro_rules! make_typed {
+    ($name:ident { $($(#[$meta:meta])*$col:ident $lit:literal),+ $(,)?}) => {
+        #[derive(Copy, Clone)]
+        #[allow(dead_code)]
+        pub(crate) struct $name<'db> {
+            inner: Table<'db>,
+            $(pub(super) $col: usize),+
+        }
 
-        for (index, col) in inner.column_iter().enumerate() {
-            match col.name_raw().as_bytes() {
-                b"IconPath" => col_icon_path = Some(index),
-                b"IconName" => col_icon_name = Some(index),
-                _ => {}
+        impl<'db> TypedTable<'db> for $name<'db> {
+            fn as_table(&self) -> Table<'db> {
+                self.inner
+            }
+
+            fn new(inner: Table<'db>) -> Self {
+                $(let mut $col = None;)+
+
+                for (index, col) in inner.column_iter().enumerate() {
+                    match col.name_raw().as_bytes() {
+                        $($lit => $col = Some(index),)+
+                        _ => continue,
+                    }
+                }
+
+                Self {
+                    inner,
+                    $($col: $col.unwrap(),)+
+                }
             }
         }
+    };
+}
 
-        Self {
-            inner,
-            col_icon_path: col_icon_path.unwrap(),
-            col_icon_name: col_icon_name.unwrap(),
-        }
+pub(crate) trait FindHash {
+    fn find_hash(&self, v: i32) -> Option<i32>;
+}
+
+impl<T: FindHash> FindHash for &T {
+    fn find_hash(&self, v: i32) -> Option<i32> {
+        (*self).find_hash(v)
     }
 }
 
-#[derive(Copy, Clone)]
-#[allow(dead_code)]
-pub(super) struct ItemSetsTable<'db> {
-    pub inner: Table<'db>,
-    /// itemIDs: ", " separated LOTs
-    col_item_ids: usize,
-    /// kitType i.e. faction
-    col_kit_type: usize,
-    /// kitRank
-    col_kit_rank: usize,
-    /// kitImage
-    col_kit_image: usize,
+#[derive(Clone)]
+pub(crate) struct TypedTableIterAdapter<'b, T, F, R> {
+    pub index: F,
+    pub keys: &'b [i32],
+    pub table: &'b T,
+    pub id_col: usize,
+    pub _p: PhantomData<fn() -> R>,
 }
+
+impl<'a, 'b: 'a, T, F, R> Serialize for TypedTableIterAdapter<'b, T, F, R>
+where
+    T: TypedTable<'a> + 'a,
+    R: TypedRow<'a, 'b, T> + 'a,
+    R: Serialize,
+    F: FindHash + Copy + 'b,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_map(self.to_iter(self.id_col))
+    }
+}
+
+impl<'a, 'b: 'a, T, F, R> TypedTableIterAdapter<'b, T, F, R> {
+    pub(crate) fn to_iter(&self, id_col: usize) -> impl Iterator<Item = (i32, R)> + 'b
+    where
+        T: TypedTable<'a> + 'a,
+        R: TypedRow<'a, 'b, T> + 'a,
+        F: FindHash + Copy + 'b,
+    {
+        let t: &'b T = self.table;
+        let i = self.index;
+        let iter = self.keys.iter().copied();
+        let mapper = move |key| {
+            let index = i.find_hash(key)?;
+            let r = R::get(t, index, key, id_col)?;
+            Some((key, r))
+        };
+        iter.filter_map(mapper)
+    }
+}
+
+make_typed!(IconsTable {
+    col_icon_path b"IconPath",
+    col_icon_name b"IconName",
+});
+
+make_typed!(ItemSetSkillsTable {
+    col_skill_set_id b"SkillSetID",
+    col_skill_id b"SkillID",
+    col_skill_cast_type b"SkillCastType",
+});
+
+make_typed!(ItemSetsTable {
+    /// itemIDs: ", " separated LOTs
+    col_item_ids b"itemIDs",
+    /// kitType i.e. faction
+    col_kit_type b"kitType",
+    /// kitRank
+    col_kit_rank b"kitRank",
+    /// kitImage
+    col_kit_image b"kitImage",
+});
 
 impl<'db> ItemSetsTable<'db> {
-    pub(super) fn new(inner: Table<'db>) -> Self {
-        let mut item_ids = None;
-        let mut kit_type = None;
-        let mut kit_rank = None;
-        let mut kit_image = None;
-
-        for (index, col) in inner.column_iter().enumerate() {
-            match col.name_raw().as_bytes() {
-                b"itemIDs" => item_ids = Some(index),
-                b"kitType" => kit_type = Some(index),
-                b"kitRank" => kit_rank = Some(index),
-                b"kitImage" => kit_image = Some(index),
-                _ => {}
-            }
-        }
-
-        Self {
-            inner,
-            col_item_ids: item_ids.unwrap(),
-            col_kit_type: kit_type.unwrap(),
-            col_kit_rank: kit_rank.unwrap(),
-            col_kit_image: kit_image.unwrap(),
-        }
-    }
-
-    pub(super) fn get_data(&self, id: i32) -> Option<ItemSet> {
+    pub(crate) fn get_data(&self, id: i32) -> Option<ItemSet> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self.inner.bucket_for_hash(hash);
 
@@ -127,91 +177,45 @@ impl<'db> ItemSetsTable<'db> {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(super) struct MissionsTable<'db> {
-    inner: Table<'db>,
-    col_mission_icon_id: usize,
-    col_is_mission: usize,
-}
+make_typed!(MissionsTable {
+    col_is_mission b"isMission",
+    col_mission_icon_id b"missionIconID",
+});
 
-impl<'db> MissionsTable<'db> {
-    pub(super) fn new(inner: Table<'db>) -> Self {
-        let mut mission_icon_id = None;
-        let mut is_mission = None;
+make_typed!(MissionTasksTable {
+    col_id b"id",
+    col_loc_status b"locStatus",
+    col_task_type b"taskType",
+    col_target b"target",
+    col_target_group b"targetGroup",
+    col_target_value b"targetValue",
+    col_task_param1 b"taskParam1",
+    col_large_task_icon b"largeTaskIcon",
+    col_icon_id b"IconID",
+    col_uid b"uid",
+    col_large_task_icon_id b"largeTaskIconID",
+    col_localize b"localize",
+    col_gate_version b"gate_version"
+});
 
-        for (index, col) in inner.column_iter().enumerate() {
-            match col.name_raw().as_bytes() {
-                b"isMission" => is_mission = Some(index),
-                b"missionIconID" => mission_icon_id = Some(index),
-                _ => continue,
-            }
-        }
-
-        Self {
-            inner,
-            col_mission_icon_id: mission_icon_id.unwrap(),
-            col_is_mission: is_mission.unwrap(),
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-pub(super) struct MissionTasksTable<'db> {
-    inner: Table<'db>,
-    col_icon_id: usize,
-    col_uid: usize,
-}
-
-impl<'db> MissionTasksTable<'db> {
-    pub(super) fn new(inner: Table<'db>) -> Self {
-        let mut icon_id = None;
-        let mut uid = None;
-
-        for (index, col) in inner.column_iter().enumerate() {
-            match col.name_raw().as_bytes() {
-                b"IconID" => icon_id = Some(index),
-                b"uid" => uid = Some(index),
-                _ => continue,
-            }
-        }
-
-        Self {
-            inner,
-            col_icon_id: icon_id.unwrap(),
-            col_uid: uid.unwrap(),
-        }
-    }
-}
+make_typed!(ObjectSkillsTable {
+    col_object_template b"objectTemplate",
+    col_skill_id b"skillID",
+    col_cast_on_type b"castOnType",
+    col_ai_combat_weight b"AICombatWeight",
+});
 
 #[derive(Copy, Clone)]
 pub struct SkillBehavior {
     pub skill_icon: Option<i32>,
 }
 
-#[derive(Copy, Clone)]
-pub(super) struct SkillBehaviorTable<'db> {
-    inner: Table<'db>,
-    col_skill_icon: usize,
-}
+make_typed!(SkillBehaviorTable {
+    col_skill_icon b"skillIcon"
+});
 
 impl<'db> SkillBehaviorTable<'db> {
-    pub(super) fn new(inner: Table<'db>) -> Self {
-        let mut skill_icon = None;
-
-        for (index, col) in inner.column_iter().enumerate() {
-            match col.name_raw().as_bytes() {
-                b"skillIcon" => skill_icon = Some(index),
-                _ => continue,
-            }
-        }
-
-        Self {
-            inner,
-            col_skill_icon: skill_icon.unwrap(),
-        }
-    }
-
-    pub(super) fn get_data(&self, id: i32) -> Option<SkillBehavior> {
+    pub(crate) fn get_data(&self, id: i32) -> Option<SkillBehavior> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self.inner.bucket_for_hash(hash);
 
@@ -232,26 +236,30 @@ impl<'db> SkillBehaviorTable<'db> {
 }
 
 #[derive(Clone)]
-pub(super) struct TypedDatabase<'db> {
-    pub(super) locale: Arc<LocaleNode>,
+pub(crate) struct TypedDatabase<'db> {
+    pub(crate) locale: Arc<LocaleNode>,
     /// LU-Res Prefix
-    pub(super) lu_res_prefix: &'db str,
+    pub(crate) lu_res_prefix: &'db str,
     /// ComponentRegistry
-    pub(super) comp_reg: Table<'db>,
+    pub(crate) comp_reg: Table<'db>,
     /// Icons
-    pub(super) icons: IconsTable<'db>,
+    pub(crate) icons: IconsTable<'db>,
     /// ItemSets
-    pub(super) item_sets: ItemSetsTable<'db>,
+    pub(crate) item_sets: ItemSetsTable<'db>,
+    /// ItemSetSkills
+    pub(crate) item_set_skills: ItemSetSkillsTable<'db>,
     /// Missions
-    pub(super) missions: MissionsTable<'db>,
+    pub(crate) missions: MissionsTable<'db>,
     /// MissionTasks
-    pub(super) mission_tasks: MissionTasksTable<'db>,
+    pub(crate) mission_tasks: MissionTasksTable<'db>,
     /// Objects
-    pub(super) objects: Table<'db>,
+    pub(crate) objects: Table<'db>,
+    /// Objects
+    pub(crate) object_skills: ObjectSkillsTable<'db>,
     /// RenderComponent
-    pub(super) render_comp: Table<'db>,
+    pub(crate) render_comp: Table<'db>,
     /// SkillBehavior
-    pub(super) skills: SkillBehaviorTable<'db>,
+    pub(crate) skills: SkillBehaviorTable<'db>,
 }
 
 #[derive(Debug, Clone)]
@@ -305,22 +313,26 @@ fn cleanup_path(url: &Latin1Str) -> Option<PathBuf> {
 }
 
 impl<'a> TypedDatabase<'a> {
-    pub(super) fn new(locale: Arc<LocaleNode>, lu_res_prefix: &'a str, tables: Tables<'a>) -> Self {
+    pub(crate) fn new(locale: Arc<LocaleNode>, lu_res_prefix: &'a str, tables: Tables<'a>) -> Self {
         TypedDatabase {
             locale,
             lu_res_prefix,
             comp_reg: tables.by_name("ComponentsRegistry").unwrap().unwrap(),
             icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
             item_sets: ItemSetsTable::new(tables.by_name("ItemSets").unwrap().unwrap()),
+            item_set_skills: ItemSetSkillsTable::new(
+                tables.by_name("ItemSetSkills").unwrap().unwrap(),
+            ),
             missions: MissionsTable::new(tables.by_name("Missions").unwrap().unwrap()),
             mission_tasks: MissionTasksTable::new(tables.by_name("MissionTasks").unwrap().unwrap()),
             objects: tables.by_name("Objects").unwrap().unwrap(),
+            object_skills: ObjectSkillsTable::new(tables.by_name("ObjectSkills").unwrap().unwrap()),
             render_comp: tables.by_name("RenderComponent").unwrap().unwrap(),
             skills: SkillBehaviorTable::new(tables.by_name("SkillBehavior").unwrap().unwrap()),
         }
     }
 
-    pub(super) fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {
+    pub(crate) fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {
         let missions = self.locale.str_children.get("Missions").unwrap();
         if id > 0 {
             if let Some(mission) = missions.int_children.get(&(id as u32)) {
@@ -333,7 +345,7 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn get_item_set_name(&self, rank: i32, id: i32) -> Option<String> {
+    pub(crate) fn get_item_set_name(&self, rank: i32, id: i32) -> Option<String> {
         let missions = self.locale.str_children.get("ItemSets").unwrap();
         if id > 0 {
             if let Some(mission) = missions.int_children.get(&(id as u32)) {
@@ -350,7 +362,7 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn get_skill_name_desc(&self, id: i32) -> (Option<String>, Option<String>) {
+    pub(crate) fn get_skill_name_desc(&self, id: i32) -> (Option<String>, Option<String>) {
         let skills = self.locale.str_children.get("SkillBehavior").unwrap();
         let mut the_name = None;
         let mut the_desc = None;
@@ -369,7 +381,7 @@ impl<'a> TypedDatabase<'a> {
         (the_name, the_desc)
     }
 
-    pub(super) fn get_icon_path(&self, id: i32) -> Option<PathBuf> {
+    pub(crate) fn get_icon_path(&self, id: i32) -> Option<PathBuf> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self.icons.inner.bucket_for_hash(hash);
 
@@ -389,7 +401,7 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn get_mission_data(&self, id: i32) -> Option<Mission> {
+    pub(crate) fn get_mission_data(&self, id: i32) -> Option<Mission> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self.missions.inner.bucket_for_hash(hash);
 
@@ -416,7 +428,7 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn get_mission_tasks(&self, id: i32) -> Vec<MissionTask> {
+    pub(crate) fn get_mission_tasks(&self, id: i32) -> Vec<MissionTask> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self.mission_tasks.inner.bucket_for_hash(hash);
         let mut tasks = Vec::with_capacity(4);
@@ -441,7 +453,7 @@ impl<'a> TypedDatabase<'a> {
         tasks
     }
 
-    pub(super) fn get_object_name_desc(&self, id: i32) -> Option<(String, String)> {
+    pub(crate) fn get_object_name_desc(&self, id: i32) -> Option<(String, String)> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self
             .objects
@@ -495,7 +507,7 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn get_render_image(&self, id: i32) -> Option<String> {
+    pub(crate) fn get_render_image(&self, id: i32) -> Option<String> {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self
             .render_comp
@@ -518,11 +530,11 @@ impl<'a> TypedDatabase<'a> {
         None
     }
 
-    pub(super) fn to_res_href(&self, path: &Path) -> String {
+    pub(crate) fn to_res_href(&self, path: &Path) -> String {
         format!("{}{}", self.lu_res_prefix, path.display())
     }
 
-    pub(super) fn get_components(&self, id: i32) -> Components {
+    pub(crate) fn get_components(&self, id: i32) -> Components {
         let hash = u32::from_ne_bytes(id.to_ne_bytes());
         let bucket = self
             .comp_reg

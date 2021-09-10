@@ -8,7 +8,7 @@ fn default_port() -> u16 {
 }
 
 fn default_lu_res() -> String {
-    String::from("https://xiphoseer.github.io/lu-res")
+    String::from("https://xiphoseer.de/lu-res")
 }
 
 #[derive(Deserialize)]
