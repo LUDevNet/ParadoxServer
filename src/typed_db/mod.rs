@@ -69,21 +69,30 @@ impl<T: FindHash> FindHash for &T {
     }
 }
 
+struct IdentityHash;
+
+impl FindHash for IdentityHash {
+    fn find_hash(&self, v: i32) -> Option<i32> {
+        Some(v)
+    }
+}
+
 #[derive(Clone)]
-pub(crate) struct TypedTableIterAdapter<'b, T, F, R> {
+pub(crate) struct TypedTableIterAdapter<'b, T, R, F, K> {
     pub index: F,
-    pub keys: &'b [i32],
+    pub keys: K,
     pub table: &'b T,
     pub id_col: usize,
     pub _p: PhantomData<fn() -> R>,
 }
 
-impl<'a, 'b: 'a, T, F, R> Serialize for TypedTableIterAdapter<'b, T, F, R>
+impl<'a, 'b: 'a, T, R, F, K> Serialize for TypedTableIterAdapter<'b, T, R, F, K>
 where
     T: TypedTable<'a> + 'a,
     R: TypedRow<'a, 'b, T> + 'a,
     R: Serialize,
     F: FindHash + Copy + 'b,
+    K: IntoIterator<Item = &'b i32> + Copy + 'b,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -93,16 +102,17 @@ where
     }
 }
 
-impl<'a, 'b: 'a, T, F, R> TypedTableIterAdapter<'b, T, F, R> {
+impl<'a, 'b: 'a, T, R, F, K> TypedTableIterAdapter<'b, T, R, F, K> {
     pub(crate) fn to_iter(&self, id_col: usize) -> impl Iterator<Item = (i32, R)> + 'b
     where
         T: TypedTable<'a> + 'a,
         R: TypedRow<'a, 'b, T> + 'a,
         F: FindHash + Copy + 'b,
+        K: IntoIterator<Item = &'b i32> + Copy + 'b,
     {
         let t: &'b T = self.table;
         let i = self.index;
-        let iter = self.keys.iter().copied();
+        let iter = self.keys.into_iter().copied();
         let mapper = move |key| {
             let index = i.find_hash(key)?;
             let r = R::get(t, index, key, id_col)?;
@@ -205,13 +215,44 @@ make_typed!(ObjectSkillsTable {
     col_ai_combat_weight b"AICombatWeight",
 });
 
+make_typed!(BehaviorParameterTable {
+    col_behavior_id b"behaviorID",
+    col_parameter_id b"parameterID",
+    col_value b"value",
+});
+
+make_typed!(BehaviorTemplateTable {
+    col_behavior_id b"behaviorID",
+    col_template_id b"templateID",
+    col_effect_id b"effectID",
+    col_effect_handle b"effectHandle",
+});
+
 #[derive(Copy, Clone)]
 pub struct SkillBehavior {
     pub skill_icon: Option<i32>,
 }
 
 make_typed!(SkillBehaviorTable {
-    col_skill_icon b"skillIcon"
+    col_skill_id b"skillID",
+    col_loc_status b"locStatus",
+    col_behavior_id b"behaviorID",
+    col_imaginationcost b"imaginationcost",
+    col_cooldowngroup b"cooldowngroup",
+    col_cooldown b"cooldown",
+    col_in_npc_editor b"inNpcEditor",
+    col_skill_icon b"skillIcon",
+    col_oom_skill_id b"oomSkillID",
+    col_oom_behavior_effect_id b"oomBehaviorEffectID",
+    col_cast_type_desc b"castTypeDesc",
+    col_im_bonus_ui b"imBonusUI",
+    col_life_bonus_ui b"lifeBonusUI",
+    col_armor_bonus_ui b"armorBonusUI",
+    col_damage_ui b"damageUI",
+    col_hide_icon b"hideIcon",
+    col_localize b"localize",
+    col_gate_version b"gate_version",
+    col_cancel_type b"cancelType"
 });
 
 impl<'db> SkillBehaviorTable<'db> {
@@ -240,6 +281,10 @@ pub(crate) struct TypedDatabase<'db> {
     pub(crate) locale: Arc<LocaleNode>,
     /// LU-Res Prefix
     pub(crate) lu_res_prefix: &'db str,
+    /// BehaviorParameter
+    pub(crate) behavior_parameters: BehaviorParameterTable<'db>,
+    /// BehaviorTemplate
+    pub(crate) behavior_templates: BehaviorTemplateTable<'db>,
     /// ComponentRegistry
     pub(crate) comp_reg: Table<'db>,
     /// Icons
@@ -317,6 +362,12 @@ impl<'a> TypedDatabase<'a> {
         TypedDatabase {
             locale,
             lu_res_prefix,
+            behavior_parameters: BehaviorParameterTable::new(
+                tables.by_name("BehaviorParameter").unwrap().unwrap(),
+            ),
+            behavior_templates: BehaviorTemplateTable::new(
+                tables.by_name("BehaviorTemplate").unwrap().unwrap(),
+            ),
             comp_reg: tables.by_name("ComponentsRegistry").unwrap().unwrap(),
             icons: IconsTable::new(tables.by_name("Icons").unwrap().unwrap()),
             item_sets: ItemSetsTable::new(tables.by_name("ItemSets").unwrap().unwrap()),

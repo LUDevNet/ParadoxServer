@@ -3,6 +3,8 @@ use std::{convert::TryFrom, fmt};
 use assembly_data::fdb::common::Latin1Str;
 use serde::{Deserialize, Serialize};
 
+pub mod skill_system;
+
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 #[serde(try_from = "u8", into = "u8")]

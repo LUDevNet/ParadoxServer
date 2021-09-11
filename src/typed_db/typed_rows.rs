@@ -1,4 +1,7 @@
-use super::{ItemSetSkillsTable, MissionTasksTable, ObjectSkillsTable, TypedTable};
+use super::{
+    BehaviorParameterTable, BehaviorTemplateTable, ItemSetSkillsTable, MissionTasksTable,
+    ObjectSkillsTable, SkillBehaviorTable, TypedTable,
+};
 use assembly_data::fdb::{
     common::{Latin1Str, Latin1String},
     mem::{Field, Row},
@@ -36,6 +39,13 @@ impl<'a> Extract<'a> for i32 {
     }
 }
 
+impl<'a> Extract<'a> for f32 {
+    type V = f32;
+    fn from_field(f: Field<'a>) -> Self::V {
+        f.into_opt_float().unwrap()
+    }
+}
+
 impl<'a> Extract<'a> for Option<i32> {
     type V = Option<i32>;
     fn from_field(f: Field<'a>) -> Self::V {
@@ -54,6 +64,13 @@ impl<'a> Extract<'a> for Option<Latin1String> {
     type V = Option<&'a Latin1Str>;
     fn from_field(f: Field<'a>) -> Self::V {
         f.into_opt_text()
+    }
+}
+
+impl<'a> Extract<'a> for Latin1String {
+    type V = &'a Latin1Str;
+    fn from_field(f: Field<'a>) -> Self::V {
+        f.into_opt_text().unwrap()
     }
 }
 
@@ -80,8 +97,21 @@ macro_rules! row_type {
         }
 
         impl<'a> $table<'a> {
+            #[allow(dead_code)]
             pub(crate) fn row_iter<'b>(&'b self) -> impl Iterator<Item = $row<'a, 'b>> {
                 self.inner
+                    .row_iter()
+                    .map(move |inner| $row::new(inner, self))
+            }
+        }
+
+        impl<'a> $table<'a> {
+            #[allow(dead_code)]
+            pub(crate) fn key_iter<'b>(&'b self, key: i32) -> impl Iterator<Item = $row<'a, 'b>> {
+                let hash = key as usize % self.inner.bucket_count();
+                self.inner
+                    .bucket_at(hash)
+                    .unwrap()
                     .row_iter()
                     .map(move |inner| $row::new(inner, self))
             }
@@ -129,6 +159,28 @@ macro_rules! ser_impl {
     };
 }
 
+row_type!(BehaviorParameterRow BehaviorParameterTable);
+ser_impl!(BehaviorParameterRow "BehaviorParameter" {
+    #[name = "behaviorID", col = col_behavior_id]
+    behavior_id: i32,
+    #[name = "parameterID", col = col_parameter_id]
+    parameter_id: Latin1String,
+    #[name = "value", col = col_value]
+    value: f32,
+});
+
+row_type!(BehaviorTemplateRow BehaviorTemplateTable);
+ser_impl!(BehaviorTemplateRow "BehaviorTemplate" {
+    #[name = "behaviorID", col = col_behavior_id]
+    behavior_id: i32,
+    #[name = "templateID", col = col_template_id]
+    template_id: i32,
+    #[name = "effectID", col = col_effect_id]
+    effect_id: Option<i32>,
+    #[name = "effectHandle", col = col_effect_handle]
+    effect_handle: Option<Latin1String>,
+});
+
 row_type!(MissionTaskRow MissionTasksTable);
 ser_impl!(MissionTaskRow "MissionTask" {
     #[name = "id", col = col_id]
@@ -173,3 +225,45 @@ impl<'a> ItemSetSkillsRow<'a, '_> {
     extract!(skill_id col_skill_id i32);
     //extract!(skill_cast_type col_skill_cast_type i32);
 }
+
+row_type!(SkillBehaviorRow SkillBehaviorTable);
+ser_impl!(SkillBehaviorRow "SkillBehavior" {
+    #[name = "skillID", col = col_skill_id]
+    skill_id: i32,
+    #[name = "locStatus", col = col_loc_status]
+    loc_status: i32,
+    #[name = "behaviorID", col = col_behavior_id]
+    behavior_id: i32,
+    #[name = "imaginationcost", col = col_imaginationcost]
+    imaginationcost: i32,
+    #[name = "cooldowngroup", col = col_cooldowngroup]
+    cooldowngroup: i32,
+    #[name = "cooldown", col = col_cooldown]
+    cooldown: f32,
+    #[name = "inNpcEditor", col = col_in_npc_editor]
+    in_npc_editor: bool,
+    #[name = "skillIcon", col = col_skill_icon]
+    skill_icon: i32,
+    #[name = "oomSkillID", col = col_oom_skill_id]
+    oom_skill_id: Latin1String,
+    #[name = "oomBehaviorEffectID", col = col_oom_behavior_effect_id]
+    oom_behavior_effect_id: i32,
+    #[name = "castTypeDesc", col = col_cast_type_desc]
+    cast_type_desc: i32,
+    #[name = "imBonusUI", col = col_im_bonus_ui]
+    im_bonus_ui: i32,
+    #[name = "lifeBonusUI", col = col_life_bonus_ui]
+    life_bonus_ui: i32,
+    #[name = "armorBonusUI", col = col_armor_bonus_ui]
+    armor_bonus_ui: i32,
+    #[name = "damageUI", col = col_damage_ui]
+    damage_ui: i32,
+    #[name = "hideIcon", col = col_hide_icon]
+    hide_icon: bool,
+    #[name = "localize", col = col_localize]
+    localize: bool,
+    #[name = "gate_version", col = col_gate_version]
+    gate_version: Latin1String,
+    #[name = "cancelType", col = col_cancel_type]
+    cancel_type: i32,
+});

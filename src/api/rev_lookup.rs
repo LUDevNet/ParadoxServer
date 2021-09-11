@@ -1,10 +1,19 @@
-use std::{collections::HashMap, convert::Infallible, marker::PhantomData};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    convert::Infallible,
+    marker::PhantomData,
+};
 
-use crate::typed_db::{
-    typed_rows::MissionTaskRow, FindHash, MissionTasksTable, TypedDatabase, TypedTableIterAdapter,
+use crate::{
+    data::skill_system::match_action_key,
+    typed_db::{
+        typed_rows::{BehaviorTemplateRow, MissionTaskRow, TypedRow},
+        BehaviorParameterTable, BehaviorTemplateTable, FindHash, MissionTasksTable, TypedDatabase,
+        TypedTableIterAdapter,
+    },
 };
 use assembly_core::buffer::CastError;
-use serde::Serialize;
+use serde::{ser::SerializeMap, Serialize};
 use warp::{
     reply::{Json, WithStatus},
     Filter, Rejection,
@@ -43,15 +52,18 @@ impl<'a, E: Serialize> Serialize for MapFilter<'a, E> {
     }
 }
 
+type MissionTasks<'a, 'b> = TypedTableIterAdapter<
+    'b,
+    MissionTasksTable<'a>,
+    MissionTaskRow<'a, 'b>,
+    &'b HashMap<i32, MissionTaskUIDLookup>,
+    &'b [i32],
+>;
+
 #[derive(Clone, Serialize)]
 pub struct SkillIDEmbedded<'a, 'b> {
     #[serde(rename = "MissionTasks")]
-    mission_tasks: TypedTableIterAdapter<
-        'b,
-        MissionTasksTable<'a>,
-        &'b HashMap<i32, MissionTaskUIDLookup>,
-        MissionTaskRow<'a, 'b>,
-    >,
+    mission_tasks: MissionTasks<'a, 'b>,
     //MapFilter<'a, MissionTaskUIDLookup>,
 }
 
@@ -77,10 +89,18 @@ impl<'a> FindHash for HashMap<i32, MissionTaskUIDLookup> {
     }
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BehaviorKeyIndex {
+    skill: BTreeSet<i32>,
+    uses: BTreeSet<i32>,
+    used_by: BTreeSet<i32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
     pub skill_ids: HashMap<i32, SkillIdLookup>,
+    pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
 }
 
 impl ReverseLookup {
@@ -116,34 +136,141 @@ impl ReverseLookup {
                 .item_sets
                 .push(s.skill_set_id());
         }
+
+        let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
+        for bp in db.behavior_parameters.row_iter() {
+            let parameter_id = bp.parameter_id();
+            let behavior_id = bp.behavior_id();
+            if match_action_key(parameter_id) {
+                let value = bp.value() as i32;
+                behaviors.entry(behavior_id).or_default().uses.insert(value);
+                behaviors
+                    .entry(value)
+                    .or_default()
+                    .used_by
+                    .insert(behavior_id);
+            }
+        }
+
+        for skill in db.skills.row_iter() {
+            let bid = skill.behavior_id();
+            let skid = skill.skill_id();
+            behaviors.entry(bid).or_default().skill.insert(skid);
+        }
+
         Self {
+            behaviors,
             skill_ids,
             mission_task_uids,
         }
     }
+
+    pub(crate) fn get_behavior_set(&self, root: i32) -> BTreeSet<i32> {
+        let mut todo = Vec::new();
+        let mut all = BTreeSet::new();
+        todo.push(root);
+
+        while let Some(next) = todo.pop() {
+            if !all.contains(&next) {
+                all.insert(next);
+                if let Some(data) = self.behaviors.get(&next) {
+                    todo.extend(data.uses.iter().filter(|&&x| x > 0));
+                }
+            }
+        }
+        all
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct BehaviorParameters<'a, 'b> {
+    key: i32,
+    table: &'b BehaviorParameterTable<'a>,
+}
+
+impl Serialize for BehaviorParameters<'_, '_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut m = serializer.serialize_map(None)?;
+        for e in self.table.key_iter(self.key) {
+            m.serialize_key(e.parameter_id())?;
+            m.serialize_value(&e.value())?;
+        }
+        m.end()
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct Behavior<'a, 'b> {
+    #[serde(flatten)]
+    template: Option<BehaviorTemplateRow<'a, 'b>>,
+    parameters: BehaviorParameters<'a, 'b>,
 }
 
 fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
     Ok(warp::reply::json(&["skill_ids"]))
 }
 
+struct EmbeddedBehaviors<'a, 'b> {
+    keys: &'b BTreeSet<i32>,
+    table_templates: &'b BehaviorTemplateTable<'a>,
+    table_parameters: &'b BehaviorParameterTable<'a>,
+}
+
+impl Serialize for EmbeddedBehaviors<'_, '_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut m = serializer.serialize_map(Some(self.keys.len()))?;
+        for &behavior_id in self.keys {
+            m.serialize_key(&behavior_id)?;
+            let b = Behavior {
+                template: BehaviorTemplateRow::get(
+                    self.table_templates,
+                    behavior_id,
+                    behavior_id,
+                    self.table_templates.col_behavior_id,
+                ),
+                parameters: BehaviorParameters {
+                    key: behavior_id,
+                    table: self.table_parameters,
+                },
+            };
+            m.serialize_value(&b)?;
+        }
+        m.end()
+    }
+}
+
+fn rev_behavior_api(db: &TypedDatabase, rev: Rev, behavior_id: i32) -> Result<Json, CastError> {
+    let data = rev.inner.behaviors.get(&behavior_id);
+    let set = rev.inner.get_behavior_set(behavior_id);
+    let val = Api {
+        data,
+        embedded: EmbeddedBehaviors {
+            keys: &set,
+            table_templates: &db.behavior_templates,
+            table_parameters: &db.behavior_parameters,
+        },
+    };
+    Ok(warp::reply::json(&val))
+}
+
 fn rev_skill_id_api(db: &'_ TypedDatabase, rev: Rev, skill_id: i32) -> Result<Json, CastError> {
     let h = rev.inner.skill_ids.get(&skill_id).map(|data| {
-        let mission_tasks = TypedTableIterAdapter::<_, _, MissionTaskRow> {
+        let mission_tasks = MissionTasks {
             index: &rev.inner.mission_task_uids,
-            keys: &data.mission_tasks,
+            keys: &data.mission_tasks[..],
             table: &db.mission_tasks,
             id_col: db.mission_tasks.col_uid,
             _p: PhantomData,
         };
         Api {
             data,
-            embedded: SkillIDEmbedded {
-                mission_tasks, /*: MapFilter {
-                                   base: &rev.inner.mission_task_uids,
-                                   keys: &data.mission_tasks,
-                               } */
-            },
+            embedded: SkillIDEmbedded { mission_tasks },
         }
     });
     Ok(warp::reply::json(&h))
@@ -173,6 +300,14 @@ pub(super) fn make_api_rev<'r>(
         .and(warp::path::end())
         .map(rev_skill_id_api)
         .map(map_res);
+
+    let rev_behaviors = rev.clone().and(warp::path("behaviors"));
+    let rev_behavior_id_base = rev_behaviors.and(warp::path::param::<i32>());
+    let rev_behavior_id = rev_behavior_id_base
+        .and(warp::path::end())
+        .map(rev_behavior_api)
+        .map(map_res);
+
     let first = rev.clone().and(warp::path::end()).map(rev_api).map(map_res);
-    first.or(rev_skill_id).unify()
+    first.or(rev_skill_id).unify().or(rev_behavior_id).unify()
 }
