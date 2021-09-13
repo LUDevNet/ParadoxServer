@@ -1,25 +1,26 @@
 use std::{
+    borrow::Borrow,
     collections::{BTreeMap, BTreeSet, HashMap},
     convert::Infallible,
-    marker::PhantomData,
 };
 
 use crate::{
+    api::adapter::{FindHash, IdentityHash, TypedTableIterAdapter},
     data::skill_system::match_action_key,
     typed_db::{
-        typed_rows::{BehaviorTemplateRow, MissionTaskRow, TypedRow},
-        BehaviorParameterTable, BehaviorTemplateTable, FindHash, MissionTasksTable, TypedDatabase,
-        TypedTableIterAdapter,
+        typed_rows::{BehaviorTemplateRow, MissionTaskRow, MissionsRow, TypedRow},
+        BehaviorParameterTable, BehaviorTemplateTable, MissionTasksTable, TypedDatabase,
     },
 };
 use assembly_core::buffer::CastError;
+use assembly_data::{fdb::common::Latin1Str, xml::localization::LocaleNode};
 use serde::{ser::SerializeMap, Serialize};
 use warp::{
     reply::{Json, WithStatus},
     Filter, Rejection,
 };
 
-use super::{map_res, tydb_filter};
+use super::{adapter::LocaleTableAdapter, map_res, tydb_filter, PercentDecoded};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -52,13 +53,56 @@ impl<'a, E: Serialize> Serialize for MapFilter<'a, E> {
     }
 }
 
-type MissionTasks<'a, 'b> = TypedTableIterAdapter<
-    'b,
-    MissionTasksTable<'a>,
-    MissionTaskRow<'a, 'b>,
-    &'b HashMap<i32, MissionTaskUIDLookup>,
-    &'b [i32],
->;
+type MissionTaskHash<'b> = &'b HashMap<i32, MissionTaskUIDLookup>;
+
+type MissionTasks<'a, 'b> =
+    TypedTableIterAdapter<'a, 'b, MissionTaskRow<'a, 'b>, MissionTaskHash<'b>, &'b [i32]>;
+
+type MissionsAdapter<'a, 'b> =
+    TypedTableIterAdapter<'a, 'b, MissionsRow<'a, 'b>, IdentityHash, &'b [i32]>;
+
+struct MissionTaskIconsAdapter<'a, 'b> {
+    table: &'b MissionTasksTable<'a>,
+    key: i32,
+}
+
+impl<'a, 'b> Serialize for MissionTaskIconsAdapter<'a, 'b> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.table.as_task_icon_iter(self.key))
+    }
+}
+
+#[derive(Clone)]
+struct MissionsTaskIconsAdapter<'a, 'b> {
+    table: &'b MissionTasksTable<'a>,
+    keys: &'b [i32],
+}
+
+impl<'a, 'b> MissionsTaskIconsAdapter<'a, 'b> {
+    pub fn new(table: &'b MissionTasksTable<'a>, keys: &'b [i32]) -> Self {
+        Self { table, keys }
+    }
+}
+
+impl<'a, 'b> Serialize for MissionsTaskIconsAdapter<'a, 'b> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_map(self.keys.iter().copied().map(|key| {
+            (
+                key,
+                MissionTaskIconsAdapter {
+                    table: self.table,
+                    key,
+                },
+            )
+        }))
+    }
+}
 
 #[derive(Clone, Serialize)]
 pub struct SkillIDEmbedded<'a, 'b> {
@@ -101,12 +145,34 @@ pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
+    pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
 }
 
 impl ReverseLookup {
     pub(crate) fn new(db: &'_ TypedDatabase<'_>) -> Self {
         let mut skill_ids: HashMap<i32, SkillIdLookup> = HashMap::new();
         let mut mission_task_uids = HashMap::new();
+        let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
+
+        for m in db.missions.row_iter() {
+            let id = m.id();
+            let d_type = m
+                .defined_type()
+                .map(Latin1Str::decode)
+                .unwrap_or_default()
+                .into_owned();
+            let d_subtype = m
+                .defined_subtype()
+                .map(Latin1Str::decode)
+                .unwrap_or_default()
+                .into_owned();
+            mission_types
+                .entry(d_type)
+                .or_default()
+                .entry(d_subtype)
+                .or_default()
+                .push(id)
+        }
 
         for r in db.mission_tasks.row_iter() {
             let uid = r.uid();
@@ -162,6 +228,7 @@ impl ReverseLookup {
             behaviors,
             skill_ids,
             mission_task_uids,
+            mission_types,
         }
     }
 
@@ -245,6 +312,126 @@ impl Serialize for EmbeddedBehaviors<'_, '_> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MissionSubtypes<'a>(&'a BTreeMap<String, Vec<i32>>);
+#[derive(Debug, Clone)]
+struct MissionTypes<'a>(&'a BTreeMap<String, BTreeMap<String, Vec<i32>>>);
+
+impl<'a> Serialize for MissionSubtypes<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.0.keys())
+    }
+}
+
+impl<'a> Serialize for MissionTypes<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut m = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            m.serialize_entry(key, &MissionSubtypes(value))?;
+        }
+        m.end()
+    }
+}
+
+fn rev_mission_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
+    Ok(warp::reply::json(&MissionTypes(&rev.inner.mission_types)))
+}
+
+#[derive(Clone, Serialize)]
+struct MissionLocale<'b> {
+    #[serde(rename = "MissionText")]
+    mission_text: LocaleTableAdapter<'b>,
+    #[serde(rename = "Missions")]
+    missions: LocaleTableAdapter<'b>,
+}
+
+impl<'b> MissionLocale<'b> {
+    pub fn new(node: &'b LocaleNode, keys: &'b [i32]) -> Self {
+        Self {
+            mission_text: LocaleTableAdapter::new(
+                node.str_children.get("MissionText").unwrap(),
+                keys,
+            ),
+            missions: LocaleTableAdapter::new(node.str_children.get("Missions").unwrap(), keys),
+        }
+    }
+}
+
+/// This is the root type that holds all embedded value for the `mission_types` lookup
+#[derive(Clone, Serialize)]
+struct MissionTypesEmbedded<'a, 'b> {
+    #[serde(rename = "Missions")]
+    missions: MissionsAdapter<'a, 'b>,
+    #[serde(rename = "MissionTaskIcons")]
+    mission_task_icons: MissionsTaskIconsAdapter<'a, 'b>,
+    locale: MissionLocale<'b>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Subtypes<'a> {
+    subtypes: MissionSubtypes<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MissionIDList<'b> {
+    mission_ids: &'b [i32],
+}
+
+fn missions_reply<'a, 'b>(
+    db: &'b TypedDatabase<'a>,
+    mission_ids: &'b [i32],
+) -> Api<MissionIDList<'b>, MissionTypesEmbedded<'a, 'b>> {
+    Api {
+        data: MissionIDList { mission_ids },
+        embedded: MissionTypesEmbedded {
+            missions: MissionsAdapter::new(&db.missions, mission_ids),
+            mission_task_icons: MissionsTaskIconsAdapter::new(&db.mission_tasks, mission_ids),
+            locale: MissionLocale::new(&db.locale, mission_ids),
+        },
+    }
+}
+
+fn rev_mission_type_api(
+    db: &TypedDatabase,
+    rev: Rev,
+    d_type: PercentDecoded,
+) -> Result<Json, CastError> {
+    let key: &String = d_type.borrow();
+    match rev.inner.mission_types.get(key) {
+        Some(t) => match t.get("") {
+            Some(missions) => Ok(warp::reply::json(&missions_reply(db, missions))),
+            None => Ok(warp::reply::json(&Subtypes {
+                subtypes: MissionSubtypes(t),
+            })),
+        },
+        None => Ok(warp::reply::json(&())),
+    }
+}
+
+fn rev_mission_subtype_api(
+    db: &TypedDatabase,
+    rev: Rev,
+    d_type: PercentDecoded,
+    d_subtype: PercentDecoded,
+) -> Result<Json, CastError> {
+    let t_key: &String = d_type.borrow();
+    let t = rev.inner.mission_types.get(t_key);
+    let s_key: &String = d_subtype.borrow();
+    let s = t.and_then(|t| t.get(s_key));
+    let m = s.map(|missions| missions_reply(db, missions));
+    Ok(warp::reply::json(&m))
+}
+
+fn rev_mission_types_full_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
+    Ok(warp::reply::json(&rev.inner.mission_types))
+}
+
 fn rev_behavior_api(db: &TypedDatabase, rev: Rev, behavior_id: i32) -> Result<Json, CastError> {
     let data = rev.inner.behaviors.get(&behavior_id);
     let set = rev.inner.get_behavior_set(behavior_id);
@@ -266,7 +453,6 @@ fn rev_skill_id_api(db: &'_ TypedDatabase, rev: Rev, skill_id: i32) -> Result<Js
             keys: &data.mission_tasks[..],
             table: &db.mission_tasks,
             id_col: db.mission_tasks.col_uid,
-            _p: PhantomData,
         };
         Api {
             data,
@@ -301,6 +487,44 @@ pub(super) fn make_api_rev<'r>(
         .map(rev_skill_id_api)
         .map(map_res);
 
+    let rev_mission_types_base = rev.clone().and(warp::path("mission_types"));
+
+    let rev_mission_types_full = rev_mission_types_base
+        .clone()
+        .and(warp::path("full"))
+        .and(warp::path::end())
+        .map(rev_mission_types_full_api)
+        .map(map_res);
+
+    let rev_mission_type = rev_mission_types_base
+        .clone()
+        .and(warp::path::param())
+        .and(warp::path::end())
+        .map(rev_mission_type_api)
+        .map(map_res);
+
+    let rev_mission_subtype = rev_mission_types_base
+        .clone()
+        .and(warp::path::param())
+        .and(warp::path::param())
+        .and(warp::path::end())
+        .map(rev_mission_subtype_api)
+        .map(map_res);
+
+    let rev_mission_types_list = rev_mission_types_base
+        .clone()
+        .and(warp::path::end())
+        .map(rev_mission_types_api)
+        .map(map_res);
+
+    let rev_mission_types = rev_mission_types_full
+        .or(rev_mission_type)
+        .unify()
+        .or(rev_mission_subtype)
+        .unify()
+        .or(rev_mission_types_list)
+        .unify();
+
     let rev_behaviors = rev.clone().and(warp::path("behaviors"));
     let rev_behavior_id_base = rev_behaviors.and(warp::path::param::<i32>());
     let rev_behavior_id = rev_behavior_id_base
@@ -309,5 +533,11 @@ pub(super) fn make_api_rev<'r>(
         .map(map_res);
 
     let first = rev.clone().and(warp::path::end()).map(rev_api).map(map_res);
-    first.or(rev_skill_id).unify().or(rev_behavior_id).unify()
+    first
+        .or(rev_skill_id)
+        .unify()
+        .or(rev_mission_types)
+        .unify()
+        .or(rev_behavior_id)
+        .unify()
 }

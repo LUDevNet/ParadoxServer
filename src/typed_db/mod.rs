@@ -1,5 +1,4 @@
 use std::{
-    marker::PhantomData,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -11,10 +10,9 @@ use assembly_data::{
     },
     xml::localization::LocaleNode,
 };
+use serde::Serialize;
 
 pub mod typed_rows;
-use serde::Serialize;
-use typed_rows::TypedRow;
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Components {
@@ -57,69 +55,6 @@ macro_rules! make_typed {
             }
         }
     };
-}
-
-pub(crate) trait FindHash {
-    fn find_hash(&self, v: i32) -> Option<i32>;
-}
-
-impl<T: FindHash> FindHash for &T {
-    fn find_hash(&self, v: i32) -> Option<i32> {
-        (*self).find_hash(v)
-    }
-}
-
-struct IdentityHash;
-
-impl FindHash for IdentityHash {
-    fn find_hash(&self, v: i32) -> Option<i32> {
-        Some(v)
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct TypedTableIterAdapter<'b, T, R, F, K> {
-    pub index: F,
-    pub keys: K,
-    pub table: &'b T,
-    pub id_col: usize,
-    pub _p: PhantomData<fn() -> R>,
-}
-
-impl<'a, 'b: 'a, T, R, F, K> Serialize for TypedTableIterAdapter<'b, T, R, F, K>
-where
-    T: TypedTable<'a> + 'a,
-    R: TypedRow<'a, 'b, T> + 'a,
-    R: Serialize,
-    F: FindHash + Copy + 'b,
-    K: IntoIterator<Item = &'b i32> + Copy + 'b,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.collect_map(self.to_iter(self.id_col))
-    }
-}
-
-impl<'a, 'b: 'a, T, R, F, K> TypedTableIterAdapter<'b, T, R, F, K> {
-    pub(crate) fn to_iter(&self, id_col: usize) -> impl Iterator<Item = (i32, R)> + 'b
-    where
-        T: TypedTable<'a> + 'a,
-        R: TypedRow<'a, 'b, T> + 'a,
-        F: FindHash + Copy + 'b,
-        K: IntoIterator<Item = &'b i32> + Copy + 'b,
-    {
-        let t: &'b T = self.table;
-        let i = self.index;
-        let iter = self.keys.into_iter().copied();
-        let mapper = move |key| {
-            let index = i.find_hash(key)?;
-            let r = R::get(t, index, key, id_col)?;
-            Some((key, r))
-        };
-        iter.filter_map(mapper)
-    }
 }
 
 make_typed!(IconsTable {
@@ -188,6 +123,10 @@ impl<'db> ItemSetsTable<'db> {
 }
 
 make_typed!(MissionsTable {
+    col_id b"id",
+    col_defined_type b"defined_type",
+    col_defined_subtype b"defined_subtype",
+    col_ui_sort_order b"UISortOrder",
     col_is_mission b"isMission",
     col_mission_icon_id b"missionIconID",
 });
@@ -207,6 +146,22 @@ make_typed!(MissionTasksTable {
     col_localize b"localize",
     col_gate_version b"gate_version"
 });
+
+#[derive(Serialize)]
+pub struct MissionTaskIcon {
+    uid: i32,
+    #[serde(rename = "largeTaskIconID")]
+    large_task_icon_id: Option<i32>,
+}
+
+impl<'a> MissionTasksTable<'a> {
+    pub fn as_task_icon_iter(&self, key: i32) -> impl Iterator<Item = MissionTaskIcon> + '_ {
+        self.key_iter(key).map(|x| MissionTaskIcon {
+            uid: x.uid(),
+            large_task_icon_id: x.large_task_icon_id(),
+        })
+    }
+}
 
 make_typed!(ObjectSkillsTable {
     col_object_template b"objectTemplate",

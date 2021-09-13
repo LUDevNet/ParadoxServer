@@ -1,6 +1,6 @@
 use super::{
     BehaviorParameterTable, BehaviorTemplateTable, ItemSetSkillsTable, MissionTasksTable,
-    ObjectSkillsTable, SkillBehaviorTable, TypedTable,
+    MissionsTable, ObjectSkillsTable, SkillBehaviorTable, TypedTable,
 };
 use assembly_data::fdb::{
     common::{Latin1Str, Latin1String},
@@ -8,10 +8,12 @@ use assembly_data::fdb::{
 };
 use serde::{ser::SerializeStruct, Serialize};
 
-pub(crate) trait TypedRow<'a, 'b, T: TypedTable<'a>> {
-    fn new(inner: Row<'a>, table: &'b T) -> Self;
+pub(crate) trait TypedRow<'a, 'b: 'a> {
+    type Table: TypedTable<'a> + 'a;
 
-    fn get(table: &'b T, index_key: i32, key: i32, id_col: usize) -> Option<Self>
+    fn new(inner: Row<'a>, table: &'b Self::Table) -> Self;
+
+    fn get(table: &'b Self::Table, index_key: i32, key: i32, id_col: usize) -> Option<Self>
     where
         Self: Sized,
     {
@@ -90,7 +92,8 @@ macro_rules! row_type {
             table: &'b $table<'a>,
         }
 
-        impl<'a, 'b> TypedRow<'a, 'b, $table<'a>> for $row<'a, 'b> {
+        impl<'a, 'b: 'a> TypedRow<'a, 'b> for $row<'a, 'b> {
+            type Table = $table<'a>;
             fn new(inner: Row<'a>, table: &'b $table<'a>) -> Self {
                 Self { inner, table }
             }
@@ -98,7 +101,7 @@ macro_rules! row_type {
 
         impl<'a> $table<'a> {
             #[allow(dead_code)]
-            pub(crate) fn row_iter<'b>(&'b self) -> impl Iterator<Item = $row<'a, 'b>> {
+            pub(crate) fn row_iter<'b: 'a>(&'b self) -> impl Iterator<Item = $row<'a, 'b>> {
                 self.inner
                     .row_iter()
                     .map(move |inner| $row::new(inner, self))
@@ -107,7 +110,10 @@ macro_rules! row_type {
 
         impl<'a> $table<'a> {
             #[allow(dead_code)]
-            pub(crate) fn key_iter<'b>(&'b self, key: i32) -> impl Iterator<Item = $row<'a, 'b>> {
+            pub(crate) fn key_iter<'b: 'a>(
+                &'b self,
+                key: i32,
+            ) -> impl Iterator<Item = $row<'a, 'b>> {
                 let hash = key as usize % self.inner.bucket_count();
                 self.inner
                     .bucket_at(hash)
@@ -181,6 +187,22 @@ ser_impl!(BehaviorTemplateRow "BehaviorTemplate" {
     effect_handle: Option<Latin1String>,
 });
 
+row_type!(MissionsRow MissionsTable);
+ser_impl!(MissionsRow "Mission" {
+    #[name = "id", col = col_id]
+    id: i32,
+    #[name = "defined_type", col = col_defined_type]
+    defined_type: Option<Latin1String>,
+    #[name = "defined_subtype", col = col_defined_subtype]
+    defined_subtype: Option<Latin1String>,
+    #[name = "isMission", col = col_is_mission]
+    is_mission: bool,
+    #[name = "UISortOrder", col = col_ui_sort_order]
+    ui_sort_order: Option<i32>,
+    #[name = "missionIconID", col = col_mission_icon_id]
+    mission_icon_id: Option<i32>,
+});
+
 row_type!(MissionTaskRow MissionTasksTable);
 ser_impl!(MissionTaskRow "MissionTask" {
     #[name = "id", col = col_id]
@@ -203,7 +225,7 @@ ser_impl!(MissionTaskRow "MissionTask" {
     icon_id: Option<i32>,
     #[name = "uid", col = col_uid]
     uid: i32,
-    #[name = "largeTaskIconID", col = col_large_task_icon]
+    #[name = "largeTaskIconID", col = col_large_task_icon_id]
     large_task_icon_id: Option<i32>,
     #[name = "localize", col = col_localize]
     localize: bool,

@@ -1,94 +1,55 @@
-use std::{borrow::Cow, convert::Infallible, error::Error, sync::Arc};
+use std::{
+    borrow::Borrow,
+    convert::Infallible,
+    error::Error,
+    str::{FromStr, Utf8Error},
+    sync::Arc,
+};
 
-use assembly_core::buffer::CastError;
-use assembly_data::{
-    fdb::{
-        common::ValueType,
-        mem::{Column, Database, Row},
-        query,
-    },
-    xml::localization::LocaleNode,
-};
-use linked_hash_map::LinkedHashMap;
-use serde::{
-    ser::{SerializeMap, SerializeSeq},
-    Serialize,
-};
+use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
+use percent_encoding::percent_decode_str;
 use warp::{
     path::Tail,
     reply::{Json, WithStatus},
-    Filter, Rejection, Reply,
+    Filter, Reply,
 };
 
 use crate::typed_db::TypedDatabase;
 
-use self::rev_lookup::{make_api_rev, ReverseLookup};
+use self::{
+    adapter::{LocaleAll, LocalePod},
+    rev_lookup::{make_api_rev, ReverseLookup},
+    tables::{make_api_tables, tables_api},
+};
 
+pub mod adapter;
 pub mod rev_lookup;
+pub mod tables;
 
-/*fn table_index(db_table: Handle<'_, FDBHeader>, lname: &Latin1Str, key: String) -> Json {
-    let table = db_table.into_table_by_name(lname).unwrap();
+#[derive(Clone, Debug)]
+pub struct PercentDecoded(pub String);
 
-    if let Some(table) = table.transpose() {
-        let table_def = table.into_definition().unwrap();
-        let table_data = table.into_data().unwrap();
-
-        let mut cols = table_def.column_header_list().unwrap();
-        let index_col = cols.next().unwrap();
-        let index_type = ValueType::try_from(index_col.raw().column_data_type).unwrap();
-        let index_name = index_col.column_name().unwrap().raw().decode();
-
-        if let Ok(pk_filter) = query::pk_filter(key, index_type) {
-            let bucket_index = pk_filter.hash() % table_data.raw().buckets.count;
-            let mut buckets = table_data.bucket_header_list().unwrap();
-            let bucket = buckets.nth(bucket_index as usize).unwrap();
-
-            let mut rows = Vec::new();
-            for row_header in bucket.row_header_iter() {
-                let row_header = row_header.unwrap();
-
-                let mut field_iter = row_header.field_data_list().unwrap();
-                let index_field = field_iter.next().unwrap();
-                let index_value = index_field.try_get_value().unwrap();
-                let index_mem = mem::Field::try_from(index_value).unwrap();
-
-                if !pk_filter.filter(&index_mem) {
-                    continue;
-                }
-
-                let mut row = LinkedHashMap::new();
-                row.insert(index_name.clone(), index_mem);
-                // add the remaining fields
-                #[allow(clippy::clone_on_copy)]
-                for col in cols.clone() {
-                    let col_name = col.column_name().unwrap().raw().decode();
-                    let field = field_iter.next().unwrap();
-                    let value = field.try_get_value().unwrap();
-                    let mem_val = mem::Field::try_from(value).unwrap();
-                    row.insert(col_name, mem_val);
-                }
-                rows.push(row);
-            }
-
-            return warp::reply::json(&rows);
-        }
+impl FromStr for PercentDecoded {
+    type Err = Utf8Error;
+    #[inline]
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = percent_decode_str(s).decode_utf8()?.to_string();
+        Ok(PercentDecoded(s))
     }
-    warp::reply::json(&())
-}*/
+}
 
-/*fn tables_api<B: AsRef<[u8]>>(db: ArcHandle<B, FDBHeader>) -> WithStatus<Json> {
-    let db = db.as_bytes_handle();
-
-    let mut list = Vec::with_capacity(db.raw().tables.count as usize);
-    let header_list = db.table_header_list().unwrap();
-    for tbl in header_list {
-        let def = tbl.into_definition().unwrap();
-        let name = *def.table_name().unwrap().raw();
-        list.push(name);
+impl Borrow<String> for PercentDecoded {
+    fn borrow(&self) -> &String {
+        &self.0
     }
-    let reply = warp::reply::json(&list);
-    warp::reply::with_status(reply, warp::http::StatusCode::OK)
-}*/
+}
+
+impl ToString for PercentDecoded {
+    #[inline]
+    fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
 
 fn map_res<E: Error>(v: Result<Json, E>) -> WithStatus<Json> {
     match v {
@@ -112,124 +73,6 @@ fn map_opt(v: Option<Json>) -> WithStatus<Json> {
     }
 }
 
-fn tables_api(db: Database) -> Result<Json, CastError> {
-    let tables = db.tables()?;
-    let mut list = Vec::with_capacity(tables.len());
-    for table in tables.iter() {
-        let table = table?;
-        let name = table.name();
-        list.push(name);
-    }
-    Ok(warp::reply::json(&list))
-}
-
-#[derive(Serialize)]
-struct TableDef<'a> {
-    name: Cow<'a, str>,
-    columns: Vec<TableCol<'a>>,
-}
-
-#[derive(Serialize)]
-struct TableCol<'a> {
-    name: Cow<'a, str>,
-    data_type: ValueType,
-}
-
-fn table_def_api(db: Database<'_>, name: String) -> Result<Option<Json>, CastError> {
-    let tables = db.tables()?;
-    if let Some(table) = tables.by_name(&name) {
-        let table = table?;
-        let name = table.name();
-        let columns: Vec<_> = table
-            .column_iter()
-            .map(|col| TableCol {
-                name: col.name(),
-                data_type: col.value_type(),
-            })
-            .collect();
-        Ok(Some(warp::reply::json(&TableDef { name, columns })))
-    } else {
-        Ok(None)
-    }
-}
-
-struct RowIter<'a, C, R, FR>
-where
-    C: Iterator<Item = Column<'a>> + Clone,
-    R: Iterator<Item = Row<'a>>,
-    FR: Fn() -> R,
-{
-    cols: C,
-    to_rows: FR,
-}
-
-impl<'a, C, R, FR> Serialize for RowIter<'a, C, R, FR>
-where
-    C: Iterator<Item = Column<'a>> + Clone,
-    R: Iterator<Item = Row<'a>>,
-    FR: Fn() -> R,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut s = serializer.serialize_seq(None)?;
-        for r in (self.to_rows)() {
-            let mut row = LinkedHashMap::new();
-            let mut fields = r.field_iter();
-            for col in self.cols.clone() {
-                let col_name = col.name();
-                let field = fields.next().unwrap();
-                row.insert(col_name, field);
-            }
-            s.serialize_element(&row)?;
-        }
-        s.end()
-    }
-}
-
-fn table_all_api(db: Database<'_>, name: String) -> Result<Option<Json>, CastError> {
-    let tables = db.tables()?;
-    let table = match tables.by_name(&name) {
-        Some(t) => t?,
-        None => return Ok(None),
-    };
-
-    let cols = table.column_iter();
-    let to_rows = || table.row_iter().take(100);
-
-    Ok(Some(warp::reply::json(&RowIter { cols, to_rows })))
-}
-
-fn table_key_api(db: Database<'_>, name: String, key: String) -> Result<Option<Json>, CastError> {
-    let tables = db.tables()?;
-    let table = match tables.by_name(&name) {
-        Some(t) => t?,
-        None => return Ok(None),
-    };
-
-    let index_field = table.column_at(0).unwrap();
-    let index_field_type = index_field.value_type();
-
-    let pk_filter = match query::pk_filter(key, index_field_type) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
-    };
-
-    let bucket_index = pk_filter.hash() as usize % table.bucket_count();
-    let bucket = table.bucket_at(bucket_index).unwrap();
-
-    let filter = &pk_filter;
-    let cols = table.column_iter();
-    let to_rows = || {
-        return bucket
-            .row_iter()
-            .filter(move |r| filter.filter(&r.field_at(0).unwrap()));
-    };
-
-    Ok(Some(warp::reply::json(&RowIter { cols, to_rows })))
-}
-
 fn wrap_404<A: Reply>(reply: A) -> WithStatus<A> {
     warp::reply::with_status(reply, warp::http::StatusCode::NOT_FOUND)
 }
@@ -246,50 +89,6 @@ fn make_api_catch_all() -> impl Filter<Extract = (WithStatus<Json>,), Error = In
     warp::any().map(|| warp::reply::json(&404)).map(wrap_404)
 }
 
-fn make_api_tables(
-    db: Database<'_>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Rejection> + Clone + Send + '_
-//where
-    //H: Filter<Extract = (ArcHandle<B, FDBHeader>,), Error = Infallible> + Clone + Send,
-{
-    let dbf = db_filter(db);
-    //let tables_base = hnd_state;
-
-    // The `/tables` endpoint
-    let tables = dbf
-        .clone()
-        .and(warp::path::end())
-        .map(tables_api)
-        .map(map_res);
-    let table = dbf.and(warp::path::param());
-
-    // The `/tables/:name/def` endpoint
-    let table_def = table
-        .clone()
-        .and(warp::path("def"))
-        .map(table_def_api)
-        .map(map_opt_res);
-    // The `/tables/:name/all` endpoint
-    let table_all = table
-        .clone()
-        .and(warp::path("all"))
-        .map(table_all_api)
-        .map(map_opt_res);
-    // The `/tables/:name/:key` endpoint
-    let table_get = table
-        .and(warp::path::param())
-        .map(table_key_api)
-        .map(map_opt_res);
-
-    tables
-        .or(table_def)
-        .unify()
-        .or(table_all)
-        .unify()
-        .or(table_get)
-        .unify()
-}
-
 /*fn copy_filter<'x, T>(v: T) -> impl Filter<Extract = (T,), Error=Infallible> + Clone + 'x where T: Send + Sync + Copy + 'x {
     warp::any().map(move || v)
 }*/
@@ -304,47 +103,6 @@ fn tydb_filter<'db>(
     db: &'db TypedDatabase<'db>,
 ) -> impl Filter<Extract = (&'db TypedDatabase<'db>,), Error = Infallible> + Clone + 'db {
     warp::any().map(move || db)
-}
-
-#[derive(Debug, Serialize)]
-struct LocalePod<'a> {
-    value: Option<&'a str>,
-    int_keys: Vec<u32>,
-    str_keys: Vec<&'a str>,
-}
-
-struct LocaleAll<'a> {
-    inner: &'a LocaleNode,
-}
-
-impl<'a> Serialize for LocaleAll<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let v_count = if self.inner.value.is_some() { 1 } else { 0 };
-        let i_count = self.inner.int_children.len();
-        let s_count = self.inner.str_children.len();
-        let count = v_count + i_count + s_count;
-
-        if i_count + s_count > 0 {
-            let mut m = serializer.serialize_map(Some(count))?;
-            if let Some(v) = &self.inner.value {
-                m.serialize_entry(&"$value", v)?;
-            }
-            for (key, inner) in &self.inner.int_children {
-                m.serialize_entry(key, &Self { inner })?;
-            }
-            for (key, inner) in &self.inner.str_children {
-                m.serialize_entry(key, &Self { inner })?;
-            }
-            m.end()
-        } else if let Some(v) = &self.inner.value {
-            serializer.serialize_str(v)
-        } else {
-            serializer.serialize_none()
-        }
-    }
 }
 
 pub(crate) fn make_api<'a>(
@@ -390,7 +148,7 @@ pub(crate) fn make_api<'a>(
                 }
             }
             if all {
-                Some(warp::reply::json(&LocaleAll { inner: node }))
+                Some(warp::reply::json(&LocaleAll::new(node)))
             } else {
                 Some(warp::reply::json(&LocalePod {
                     value: node.value.as_deref(),
