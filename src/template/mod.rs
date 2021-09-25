@@ -2,6 +2,7 @@ use std::{borrow::Cow, convert::Infallible, fmt::Write, sync::Arc};
 
 //use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use handlebars::Handlebars;
+use paradox_typed_db::{typed_ext::MissionKind, TypedDatabase};
 use serde::Serialize;
 use warp::{path::FullPath, Filter};
 
@@ -162,8 +163,6 @@ pub struct IndexParams {
 
 static DEFAULT_IMG: &str = "/ui/ingame/freetrialcongratulations_id.png";
 
-use crate::typed_db::{MissionKind, TypedDatabase};
-
 #[derive(Debug, Clone)]
 struct Meta {
     title: Cow<'static, str>,
@@ -234,8 +233,14 @@ fn meta<'r>(
 pub(crate) fn make_spa_dynamic<'r>(
     data: &'static TypedDatabase<'static>,
     hb: Arc<Handlebars<'r>>,
+    domain: &str,
     //    hnd: ArcHandle<B, FDBHeader>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Infallible> + Clone + 'r {
+    let dom = {
+        let d = Box::leak(domain.to_string().into_boxed_str()) as &str;
+        warp::any().map(move || d)
+    };
+
     // Prepare the default image
     let mut default_img = data.lu_res_prefix.to_owned();
     default_img.push_str(DEFAULT_IMG);
@@ -245,9 +250,10 @@ pub(crate) fn make_spa_dynamic<'r>(
     let handlebars = move |with_template| render(with_template, hb.clone());
 
     warp::any()
+        .and(dom)
         .and(meta(data))
         .and(warp::path::full())
-        .map(move |meta: Meta, full_path: FullPath| WithTemplate {
+        .map(move |dom: &str, meta: Meta, full_path: FullPath| WithTemplate {
             name: "template.html",
             value: IndexParams {
                 title: meta.title,
@@ -259,7 +265,7 @@ pub(crate) fn make_spa_dynamic<'r>(
                     .image
                     .map(Cow::Owned)
                     .unwrap_or(Cow::Borrowed(default_img)),
-                url: Cow::Owned(format!("https://lu.lcdruniverse.org{}", full_path.as_str())),
+                url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
             },
         })
         .map(handlebars)

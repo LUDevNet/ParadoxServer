@@ -37,7 +37,9 @@ pub struct GeneralOptions {
     #[serde(default)]
     pub cors: CorsOptions,
     /// The base of the path
-    pub base: String,
+    pub base: Option<String>,
+    /// The canonical domain
+    pub domain: String,
 }
 
 #[derive(Deserialize)]

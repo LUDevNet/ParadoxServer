@@ -6,6 +6,7 @@ use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
 use handlebars::Handlebars;
 use mapr::Mmap;
+use paradox_typed_db::TypedDatabase;
 use regex::{Captures, Regex};
 use structopt::StructOpt;
 use template::make_spa_dynamic;
@@ -15,9 +16,8 @@ mod api;
 mod config;
 mod data;
 mod template;
-pub(crate) mod typed_db;
 
-use crate::{api::rev_lookup::ReverseLookup, typed_db::TypedDatabase};
+use crate::{api::rev_lookup::ReverseLookup};
 
 fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
@@ -80,7 +80,6 @@ async fn main() -> color_eyre::Result<()> {
     let rev = Box::leak(Box::new(ReverseLookup::new(data)));
 
     // Make the API
-    let base = warp::path(cfg.general.base);
     let api = warp::path("api").and(make_api(db, data, rev, lr.clone()));
 
     let spa_path = cfg.data.explorer_spa;
@@ -97,12 +96,18 @@ async fn main() -> color_eyre::Result<()> {
     // easily with others...
     let hb = Arc::new(hb);
 
-    let spa_dynamic = make_spa_dynamic(data, hb);
+    let spa_dynamic = make_spa_dynamic(data, hb, &cfg.general.domain);
 
     //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path).or(spa_dynamic);
 
-    let routes = warp::get().and(base).and(api.or(spa));
+    let root = if let Some(b) = cfg.general.base {
+        let base = warp::path(b);
+        warp::get().and(base).boxed()
+    } else {
+        warp::get().boxed()
+    };
+    let routes = root.and(api.or(spa));
 
     let ip = if cfg.general.public {
         [0, 0, 0, 0]

@@ -1,7 +1,6 @@
 use assembly_data::xml::localization::LocaleNode;
+use paradox_typed_db::typed_rows::TypedRow;
 use serde::{ser::SerializeMap, Serialize};
-
-use crate::typed_db::typed_rows::TypedRow;
 
 pub(crate) trait FindHash {
     fn find_hash(&self, v: i32) -> Option<i32>;

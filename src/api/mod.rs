@@ -7,14 +7,13 @@ use std::{
 };
 
 use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
+use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
 use warp::{
     path::Tail,
     reply::{Json, WithStatus},
     Filter, Reply,
 };
-
-use crate::typed_db::TypedDatabase;
 
 use self::{
     adapter::{LocaleAll, LocalePod},
