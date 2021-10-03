@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Deserialize;
 use structopt::StructOpt;
@@ -7,8 +7,8 @@ fn default_port() -> u16 {
     3030
 }
 
-fn default_lu_res() -> String {
-    String::from("https://xiphoseer.de/lu-res")
+fn default_lu_res_cache() -> PathBuf {
+    PathBuf::from("lu-res")
 }
 
 #[derive(Deserialize)]
@@ -40,6 +40,13 @@ pub struct GeneralOptions {
     pub base: Option<String>,
     /// The canonical domain
     pub domain: String,
+    /// Whether this is served via https
+    #[serde(default = "no")]
+    pub secure: bool,
+}
+
+fn no() -> bool {
+    false
 }
 
 #[derive(Deserialize)]
@@ -58,9 +65,11 @@ pub struct DataOptions {
     pub cdclient: PathBuf,
     /// The lu-explorer static files
     pub explorer_spa: PathBuf,
+    /// The lu-res cache path
+    #[serde(default = "default_lu_res_cache")]
+    pub lu_res_cache: PathBuf,
     /// The LU-Res prefix
-    #[serde(default = "default_lu_res")]
-    pub lu_res_prefix: String,
+    pub lu_res_prefix: Option<String>,
     /// The locale.xml file
     pub locale: PathBuf,
 }
@@ -71,6 +80,7 @@ pub struct Config {
     pub tls: Option<TlsOptions>,
     pub data: DataOptions,
     pub host: Vec<HostConfig>,
+    pub auth: Option<AuthConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +89,11 @@ pub struct HostConfig {
     #[serde(default)]
     pub redirect: bool,
     pub base: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthConfig {
+    pub basic: Option<BTreeMap<String, String>>,
 }
 
 #[derive(StructOpt)]

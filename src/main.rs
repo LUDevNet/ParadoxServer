@@ -1,9 +1,15 @@
-use std::{borrow::Cow, fs::File, sync::Arc};
+use std::{
+    borrow::Cow,
+    fs::File,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use api::make_api;
 use assembly_data::{fdb::mem::Database, xml::localization::load_locale};
 use color_eyre::eyre::WrapErr;
-use config::{Config, Options};
+use config::{AuthConfig, Config, Options};
 use handlebars::Handlebars;
 use mapr::Mmap;
 use paradox_typed_db::TypedDatabase;
@@ -11,7 +17,13 @@ use regex::{Captures, Regex};
 use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tracing::info;
-use warp::{filters::BoxedFilter, hyper::Uri, path::Tail, Filter};
+use warp::{
+    filters::BoxedFilter,
+    hyper::{StatusCode, Uri},
+    path::Tail,
+    reply::{with_header, with_status, Html, WithHeader, WithStatus},
+    Filter, Future, Rejection,
+};
 
 mod api;
 mod config;
@@ -37,6 +49,78 @@ fn make_meta_template(text: &str) -> Cow<str> {
         };
         format!("<meta {}=\"{}\" content=\"{}\">", kind, name, value)
     })
+}
+
+#[derive(Clone)]
+pub enum AuthImpl {
+    None,
+    Basic(Arc<Vec<String>>),
+}
+
+pub struct CheckFuture {
+    is_allowed: bool,
+}
+
+type CheckResult = Result<WithStatus<WithHeader<Html<&'static str>>>, Rejection>;
+
+impl CheckFuture {
+    fn get(&self) -> CheckResult {
+        if self.is_allowed {
+            Err(warp::reject()) // and fall through to the app
+        } else {
+            Ok(with_status(
+                with_header(
+                    warp::reply::html("Access denied"),
+                    "WWW-Authenticate",
+                    "Basic realm=\"LU-Explorer\"",
+                ),
+                StatusCode::UNAUTHORIZED,
+            ))
+        }
+    }
+}
+
+impl Future for CheckFuture {
+    type Output = CheckResult;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(self.get())
+    }
+}
+
+impl AuthImpl {
+    fn check(&self, auth: Option<String>) -> CheckFuture {
+        match self {
+            Self::None => return CheckFuture { is_allowed: true },
+            Self::Basic(allowed) => {
+                if let Some(header) = auth {
+                    if let Some(hash) = header.strip_prefix("Basic ") {
+                        if allowed.iter().any(|x| x == hash) {
+                            return CheckFuture { is_allowed: true };
+                        }
+                    }
+                }
+            }
+        }
+        CheckFuture { is_allowed: false }
+    }
+}
+
+fn make_auth_fn(cfg: &Option<AuthConfig>) -> impl Fn(Option<String>) -> CheckFuture + Clone {
+    let mut auth_impl = AuthImpl::None;
+    if let Some(auth_cfg) = cfg {
+        if let Some(basic_auth_cfg) = &auth_cfg.basic {
+            let accounts: Vec<String> = basic_auth_cfg
+                .iter()
+                .map(|(user, password)| {
+                    let text = format!("{}:{}", user, password);
+                    base64::encode(&text)
+                })
+                .collect();
+            auth_impl = AuthImpl::Basic(Arc::new(accounts));
+        }
+    }
+    move |v: Option<String>| auth_impl.check(v)
 }
 
 #[tokio::main]
@@ -72,7 +156,22 @@ async fn main() -> color_eyre::Result<()> {
 
     // Load the typed database
     let tables = db.tables().unwrap();
-    let lu_res_prefix = Box::leak(cfg.data.lu_res_prefix.clone().into_boxed_str());
+
+    let scheme = match cfg.general.secure {
+        true => "https",
+        false => "http",
+    };
+
+    let cfg_g = &cfg.general;
+    let lu_res = cfg.data.lu_res_prefix.unwrap_or_else(|| {
+        if let Some(b) = &cfg_g.base {
+            format!("{}://{}/{}/lu-res", scheme, &cfg_g.domain, b)
+        } else {
+            format!("{}://{}/lu-res", scheme, &cfg_g.domain)
+        }
+    });
+
+    let lu_res_prefix = Box::leak(lu_res.clone().into_boxed_str());
     let data = Box::leak(Box::new(TypedDatabase::new(
         lr.clone(),
         lu_res_prefix,
@@ -102,6 +201,20 @@ async fn main() -> color_eyre::Result<()> {
     //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path).or(spa_dynamic);
 
+    // Initialize the lu-res cache
+    let res = warp::path("lu-res")
+        .and(warp::fs::dir(cfg.data.lu_res_cache))
+        .boxed();
+
+    // Finally collect all routes
+    let routes = res.or(api).or(spa);
+
+    let auth_fn = make_auth_fn(&cfg.auth);
+
+    let auth = warp::filters::header::optional::<String>("Authorization").and_then(auth_fn);
+
+    let routes = auth.or(routes);
+
     fn base_filter(
         b: Option<String>,
     ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
@@ -130,7 +243,7 @@ async fn main() -> color_eyre::Result<()> {
         }
     }
 
-    let routes = root.and(api.or(spa)).boxed();
+    let routes = root.and(routes).boxed();
 
     let mut redirect: BoxedFilter<(_,)> = warp::any()
         .and_then(|| async move { Err(warp::reject()) })
