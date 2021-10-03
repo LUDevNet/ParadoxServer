@@ -10,14 +10,15 @@ use paradox_typed_db::TypedDatabase;
 use regex::{Captures, Regex};
 use structopt::StructOpt;
 use template::make_spa_dynamic;
-use warp::Filter;
+use tracing::info;
+use warp::{filters::BoxedFilter, hyper::Uri, path::Tail, Filter};
 
 mod api;
 mod config;
 mod data;
 mod template;
 
-use crate::{api::rev_lookup::ReverseLookup};
+use crate::api::rev_lookup::ReverseLookup;
 
 fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
@@ -101,13 +102,69 @@ async fn main() -> color_eyre::Result<()> {
     //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path).or(spa_dynamic);
 
-    let root = if let Some(b) = cfg.general.base {
-        let base = warp::path(b);
-        warp::get().and(base).boxed()
-    } else {
-        warp::get().boxed()
-    };
-    let routes = root.and(api.or(spa));
+    fn base_filter(
+        b: Option<String>,
+    ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
+        if let Some(b) = b {
+            let base = warp::path(b);
+            warp::get().and(base).boxed()
+        } else {
+            warp::get().boxed()
+        }
+    }
+
+    let canonical_domain = cfg.general.domain.clone();
+    let canonical_base = cfg.general.base.clone().unwrap_or_default();
+
+    let mut root = base_filter(cfg.general.base).boxed();
+
+    for host in &cfg.host {
+        let base = base_filter(host.base.clone());
+        if !host.redirect {
+            info!("Loading host {:?}", host);
+            root = warp::filters::host::exact(&host.name)
+                .and(base)
+                .or(root)
+                .unify()
+                .boxed();
+        }
+    }
+
+    let routes = root.and(api.or(spa)).boxed();
+
+    let mut redirect: BoxedFilter<(_,)> = warp::any()
+        .and_then(|| async move { Err(warp::reject()) })
+        .boxed();
+
+    for host in cfg.host {
+        if host.redirect {
+            info!("Loading redirect {:?}", host);
+            let base = base_filter(host.base);
+            let dom = canonical_domain.clone();
+            let bas = canonical_base.clone();
+            let new_redirect = base
+                .and(warp::filters::path::tail())
+                .map(move |path: Tail| {
+                    let mut new_path = String::from("/");
+                    new_path.push_str(&bas);
+                    if !new_path.ends_with('/') {
+                        new_path.push('/');
+                    }
+                    new_path.push_str(path.as_str());
+                    let uri = Uri::builder()
+                        .scheme("https")
+                        .authority(dom.as_str())
+                        .path_and_query(&new_path)
+                        .build()
+                        .unwrap();
+                    warp::redirect::permanent(uri)
+                })
+                .boxed();
+            redirect = redirect.or(new_redirect).unify().boxed();
+        }
+    }
+
+    let routes = redirect.or(routes);
 
     let ip = if cfg.general.public {
         [0, 0, 0, 0]

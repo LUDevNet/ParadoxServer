@@ -253,20 +253,22 @@ pub(crate) fn make_spa_dynamic<'r>(
         .and(dom)
         .and(meta(data))
         .and(warp::path::full())
-        .map(move |dom: &str, meta: Meta, full_path: FullPath| WithTemplate {
-            name: "template.html",
-            value: IndexParams {
-                title: meta.title,
-                r#type: "website",
-                card: "summary",
-                description: meta.description,
-                site: Cow::Borrowed("@lu_explorer"),
-                image: meta
-                    .image
-                    .map(Cow::Owned)
-                    .unwrap_or(Cow::Borrowed(default_img)),
-                url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
+        .map(
+            move |dom: &str, meta: Meta, full_path: FullPath| WithTemplate {
+                name: "template.html",
+                value: IndexParams {
+                    title: meta.title,
+                    r#type: "website",
+                    card: "summary",
+                    description: meta.description,
+                    site: Cow::Borrowed("@lu_explorer"),
+                    image: meta
+                        .image
+                        .map(Cow::Owned)
+                        .unwrap_or(Cow::Borrowed(default_img)),
+                    url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
+                },
             },
-        })
+        )
         .map(handlebars)
 }

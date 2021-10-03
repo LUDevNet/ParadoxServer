@@ -70,6 +70,15 @@ pub struct Config {
     pub general: GeneralOptions,
     pub tls: Option<TlsOptions>,
     pub data: DataOptions,
+    pub host: Vec<HostConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HostConfig {
+    pub name: String,
+    #[serde(default)]
+    pub redirect: bool,
+    pub base: Option<String>,
 }
 
 #[derive(StructOpt)]
