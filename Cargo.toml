@@ -11,7 +11,7 @@ pretty_env_logger = "0.4.0"
 structopt = "0.3.21"
 color-eyre = "0.5.10"
 mapr = "0.8.0"
-paradox-typed-db = { path = "../paradox-typed-db" }
+paradox-typed-db = { git = "https://github.com/Xiphoseer/paradox-typed-db.git"  }
 percent-encoding = "2.1.0"
 regex = "1.4"
 toml = "0.5"
