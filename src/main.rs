@@ -151,7 +151,7 @@ async fn main() -> color_eyre::Result<()> {
     let db = Database::new(buf);
 
     // Load the locale
-    let locale_root = load_locale(&cfg.data.locale)?;
+    let locale_root = load_locale(&cfg.data.locale).context("Failed to load locale.xml")?;
     let lr = Arc::new(locale_root);
 
     // Load the typed database
@@ -278,6 +278,8 @@ async fn main() -> color_eyre::Result<()> {
     }
 
     let routes = redirect.or(routes);
+    let log = warp::log("paradox::routes");
+    let routes = routes.with(log);
 
     let ip = if cfg.general.public {
         [0, 0, 0, 0]

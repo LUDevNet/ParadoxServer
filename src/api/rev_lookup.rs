@@ -21,7 +21,7 @@ use crate::{
     data::skill_system::match_action_key,
 };
 
-use super::{adapter::LocaleTableAdapter, map_res, tydb_filter, PercentDecoded};
+use super::{adapter::LocaleTableAdapter, map_opt_res, map_res, tydb_filter, PercentDecoded};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -142,11 +142,20 @@ pub struct BehaviorKeyIndex {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ComponentUse {
+    id: i32,
+    component_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
+
+    pub object_types: BTreeMap<String, Vec<i32>>,
+    pub component_use: BTreeMap<i32, BTreeMap<i32, Vec<i32>>>,
 }
 
 impl ReverseLookup {
@@ -204,6 +213,25 @@ impl ReverseLookup {
                 .push(s.skill_set_id());
         }
 
+        let mut object_types = BTreeMap::<_, Vec<_>>::new();
+        for o in db.objects.row_iter() {
+            let id = o.id();
+            let ty = o.r#type().decode().into_owned();
+
+            let entry = object_types.entry(ty).or_default();
+            entry.push(id);
+        }
+
+        let mut component_use: BTreeMap<i32, BTreeMap<i32, Vec<i32>>> = BTreeMap::new();
+        for creg in db.comp_reg.row_iter() {
+            let id = creg.id();
+            let ty = creg.component_type();
+            let cid = creg.component_id();
+            let ty_entry = component_use.entry(ty).or_default();
+            let co_entry = ty_entry.entry(cid).or_default();
+            co_entry.push(id);
+        }
+
         let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
         for bp in db.behavior_parameters.row_iter() {
             let parameter_id = bp.parameter_id();
@@ -230,6 +258,9 @@ impl ReverseLookup {
             skill_ids,
             mission_task_uids,
             mission_types,
+
+            object_types,
+            component_use,
         }
     }
 
@@ -433,6 +464,25 @@ fn rev_mission_types_full_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, Cas
     Ok(warp::reply::json(&rev.inner.mission_types))
 }
 
+fn rev_object_type_api(
+    _db: &TypedDatabase,
+    rev: Rev,
+    ty: PercentDecoded,
+) -> Result<Option<Json>, CastError> {
+    let key: &String = ty.borrow();
+    tracing::info!("{}", key);
+    Ok(rev
+        .inner
+        .object_types
+        .get(key)
+        .map(|objects| warp::reply::json(&objects)))
+}
+
+fn rev_object_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
+    let keys: Vec<_> = rev.inner.object_types.keys().collect();
+    Ok(warp::reply::json(&keys))
+}
+
 fn rev_behavior_api(db: &TypedDatabase, rev: Rev, behavior_id: i32) -> Result<Json, CastError> {
     let data = rev.inner.behaviors.get(&behavior_id);
     let set = rev.inner.get_behavior_set(behavior_id);
@@ -526,6 +576,23 @@ pub(super) fn make_api_rev<'r>(
         .or(rev_mission_types_list)
         .unify();
 
+    let rev_object_types_base = rev.clone().and(warp::path("object_types"));
+
+    let rev_object_type = rev_object_types_base
+        .clone()
+        .and(warp::path::param())
+        .and(warp::path::end())
+        .map(rev_object_type_api)
+        .map(map_opt_res);
+
+    let rev_object_types_list = rev_object_types_base
+        .clone()
+        .and(warp::path::end())
+        .map(rev_object_types_api)
+        .map(map_res);
+
+    let rev_object_types = rev_object_type.or(rev_object_types_list).unify();
+
     let rev_behaviors = rev.clone().and(warp::path("behaviors"));
     let rev_behavior_id_base = rev_behaviors.and(warp::path::param::<i32>());
     let rev_behavior_id = rev_behavior_id_base
@@ -538,6 +605,8 @@ pub(super) fn make_api_rev<'r>(
         .or(rev_skill_id)
         .unify()
         .or(rev_mission_types)
+        .unify()
+        .or(rev_object_types)
         .unify()
         .or(rev_behavior_id)
         .unify()

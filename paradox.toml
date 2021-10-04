@@ -1,9 +1,10 @@
 [general]
 port = 3030
 public = false
-base = "explorer"
+domain = "localhost"
 
 [data]
 cdclient = "../cdclient.fdb"
 explorer_spa = "../../explorer/docs"
-locale = "../../install/ulcdr/locale/locale.xml"
+lu_res_cache = "../../../repos/lu-res"
+locale = "../../../install/ulcdr/locale/locale.xml"

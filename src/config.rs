@@ -79,6 +79,7 @@ pub struct Config {
     pub general: GeneralOptions,
     pub tls: Option<TlsOptions>,
     pub data: DataOptions,
+    #[serde(default)]
     pub host: Vec<HostConfig>,
     pub auth: Option<AuthConfig>,
 }
