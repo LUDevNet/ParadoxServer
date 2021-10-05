@@ -3,8 +3,28 @@ use std::{borrow::Cow, convert::Infallible, fmt::Write, sync::Arc};
 //use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use handlebars::Handlebars;
 use paradox_typed_db::{typed_ext::MissionKind, TypedDatabase};
+use regex::{Captures, Regex};
 use serde::Serialize;
 use warp::{path::FullPath, Filter};
+
+pub fn make_meta_template(text: &str) -> Cow<str> {
+    let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
+    re.replace_all(text, |cap: &Captures| {
+        let kind = &cap[1];
+        let name = &cap[2];
+        let value = match name {
+            "twitter:title" | "og:title" => "{{title}}",
+            "twitter:description" | "og:description" => "{{description}}",
+            "twitter:image" | "og:image" => "{{image}}",
+            "og:url" => "{{url}}",
+            "og:type" => "{{type}}",
+            "twitter:card" => "{{card}}",
+            "twitter:site" => "{{site}}",
+            _ => &cap[3],
+        };
+        format!("<meta {}=\"{}\" content=\"{}\">", kind, name, value)
+    })
+}
 
 pub struct WithTemplate<T: Serialize> {
     pub name: &'static str,

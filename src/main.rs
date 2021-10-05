@@ -1,127 +1,24 @@
-use std::{
-    borrow::Cow,
-    fs::File,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::{fs::File, sync::Arc};
 
 use api::make_api;
 use assembly_data::{fdb::mem::Database, xml::localization::load_locale};
 use color_eyre::eyre::WrapErr;
-use config::{AuthConfig, Config, Options};
+use config::{Config, Options};
 use handlebars::Handlebars;
 use mapr::Mmap;
 use paradox_typed_db::TypedDatabase;
-use regex::{Captures, Regex};
 use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tracing::info;
-use warp::{
-    filters::BoxedFilter,
-    hyper::{StatusCode, Uri},
-    path::Tail,
-    reply::{with_header, with_status, Html, WithHeader, WithStatus},
-    Filter, Future, Rejection,
-};
+use warp::{filters::BoxedFilter, hyper::Uri, path::Tail, Filter};
 
 mod api;
+mod auth;
 mod config;
 mod data;
 mod template;
 
-use crate::api::rev_lookup::ReverseLookup;
-
-fn make_meta_template(text: &str) -> Cow<str> {
-    let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
-    re.replace_all(text, |cap: &Captures| {
-        let kind = &cap[1];
-        let name = &cap[2];
-        let value = match name {
-            "twitter:title" | "og:title" => "{{title}}",
-            "twitter:description" | "og:description" => "{{description}}",
-            "twitter:image" | "og:image" => "{{image}}",
-            "og:url" => "{{url}}",
-            "og:type" => "{{type}}",
-            "twitter:card" => "{{card}}",
-            "twitter:site" => "{{site}}",
-            _ => &cap[3],
-        };
-        format!("<meta {}=\"{}\" content=\"{}\">", kind, name, value)
-    })
-}
-
-#[derive(Clone)]
-pub enum AuthImpl {
-    None,
-    Basic(Arc<Vec<String>>),
-}
-
-pub struct CheckFuture {
-    is_allowed: bool,
-}
-
-type CheckResult = Result<WithStatus<WithHeader<Html<&'static str>>>, Rejection>;
-
-impl CheckFuture {
-    fn get(&self) -> CheckResult {
-        if self.is_allowed {
-            Err(warp::reject()) // and fall through to the app
-        } else {
-            Ok(with_status(
-                with_header(
-                    warp::reply::html("Access denied"),
-                    "WWW-Authenticate",
-                    "Basic realm=\"LU-Explorer\"",
-                ),
-                StatusCode::UNAUTHORIZED,
-            ))
-        }
-    }
-}
-
-impl Future for CheckFuture {
-    type Output = CheckResult;
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(self.get())
-    }
-}
-
-impl AuthImpl {
-    fn check(&self, auth: Option<String>) -> CheckFuture {
-        match self {
-            Self::None => return CheckFuture { is_allowed: true },
-            Self::Basic(allowed) => {
-                if let Some(header) = auth {
-                    if let Some(hash) = header.strip_prefix("Basic ") {
-                        if allowed.iter().any(|x| x == hash) {
-                            return CheckFuture { is_allowed: true };
-                        }
-                    }
-                }
-            }
-        }
-        CheckFuture { is_allowed: false }
-    }
-}
-
-fn make_auth_fn(cfg: &Option<AuthConfig>) -> impl Fn(Option<String>) -> CheckFuture + Clone {
-    let mut auth_impl = AuthImpl::None;
-    if let Some(auth_cfg) = cfg {
-        if let Some(basic_auth_cfg) = &auth_cfg.basic {
-            let accounts: Vec<String> = basic_auth_cfg
-                .iter()
-                .map(|(user, password)| {
-                    let text = format!("{}:{}", user, password);
-                    base64::encode(&text)
-                })
-                .collect();
-            auth_impl = AuthImpl::Basic(Arc::new(accounts));
-        }
-    }
-    move |v: Option<String>| auth_impl.check(v)
-}
+use crate::{api::rev_lookup::ReverseLookup, template::make_meta_template};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -209,7 +106,7 @@ async fn main() -> color_eyre::Result<()> {
     // Finally collect all routes
     let routes = res.or(api).or(spa);
 
-    let auth_fn = make_auth_fn(&cfg.auth);
+    let auth_fn = auth::make_auth_fn(&cfg.auth);
 
     let auth = warp::filters::header::optional::<String>("Authorization").and_then(auth_fn);
 
