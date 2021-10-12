@@ -104,58 +104,58 @@ fn tydb_filter<'db>(
     warp::any().map(move || db)
 }
 
+pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::Json> + Clone {
+    move |p: Tail| {
+        let path = p.as_str().trim_end_matches('/');
+        let mut node = lr.as_ref();
+        let mut all = false;
+        if !path.is_empty() {
+            let path = match path.strip_suffix("/$all") {
+                Some(prefix) => {
+                    all = true;
+                    prefix
+                }
+                None => path,
+            };
+
+            // Skip loop for root node
+            for seg in path.split('/') {
+                if let Some(new) = {
+                    if let Ok(num) = seg.parse::<u32>() {
+                        node.int_children.get(&num)
+                    } else {
+                        node.str_children.get(seg)
+                    }
+                } {
+                    node = new;
+                } else {
+                    return None;
+                }
+            }
+        }
+        if all {
+            Some(warp::reply::json(&LocaleAll::new(node)))
+        } else {
+            Some(warp::reply::json(&LocalePod {
+                value: node.value.as_deref(),
+                int_keys: node.int_children.keys().cloned().collect(),
+                str_keys: node.str_children.keys().map(|s| s.as_ref()).collect(),
+            }))
+        }
+    }
+}
+
 pub(crate) fn make_api<'a>(
     db: Database<'a>,
     tydb: &'static TypedDatabase<'a>,
     rev: &'static ReverseLookup,
     lr: Arc<LocaleNode>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + 'a
-//where
-//    B: AsRef<[u8]> + Send + Sync + 'db,
-{
-    // v0
+) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + 'a {
     let v0_base = warp::path("v0");
     let v0_tables = warp::path("tables").and(make_api_tables(db));
     let v0_locale = warp::path("locale")
         .and(warp::path::tail())
-        .map(move |p: Tail| {
-            let path = p.as_str().trim_end_matches('/');
-            let mut node = lr.as_ref();
-            let mut all = false;
-            if !path.is_empty() {
-                let path = match path.strip_suffix("/$all") {
-                    Some(prefix) => {
-                        all = true;
-                        prefix
-                    }
-                    None => path,
-                };
-
-                // Skip loop for root node
-                for seg in path.split('/') {
-                    if let Some(new) = {
-                        if let Ok(num) = seg.parse::<u32>() {
-                            node.int_children.get(&num)
-                        } else {
-                            node.str_children.get(seg)
-                        }
-                    } {
-                        node = new;
-                    } else {
-                        return None;
-                    }
-                }
-            }
-            if all {
-                Some(warp::reply::json(&LocaleAll::new(node)))
-            } else {
-                Some(warp::reply::json(&LocalePod {
-                    value: node.value.as_deref(),
-                    int_keys: node.int_children.keys().cloned().collect(),
-                    str_keys: node.str_children.keys().map(|s| s.as_ref()).collect(),
-                }))
-            }
-        })
+        .map(locale_api(lr))
         .map(map_opt);
 
     let v0_rev = warp::path("rev").and(make_api_rev(tydb, rev));

@@ -9,16 +9,22 @@ use mapr::Mmap;
 use paradox_typed_db::TypedDatabase;
 use structopt::StructOpt;
 use template::make_spa_dynamic;
-use tracing::info;
-use warp::{filters::BoxedFilter, hyper::Uri, path::Tail, Filter};
+use warp::{filters::BoxedFilter, Filter};
 
 mod api;
 mod auth;
 mod config;
 mod data;
+mod fallback;
+mod redirect;
 mod template;
 
-use crate::{api::rev_lookup::ReverseLookup, template::make_meta_template};
+use crate::{
+    api::rev_lookup::ReverseLookup,
+    fallback::make_fallback,
+    redirect::{add_host_filters, add_redirect_filters, base_filter},
+    template::make_meta_template,
+};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -60,8 +66,8 @@ async fn main() -> color_eyre::Result<()> {
     };
 
     let cfg_g = &cfg.general;
-    let lu_res = cfg.data.lu_res_prefix.unwrap_or_else(|| {
-        if let Some(b) = &cfg_g.base {
+    let lu_res = cfg.data.lu_res_prefix.clone().unwrap_or_else(|| {
+        if let Some(b) = cfg_g.base.as_deref() {
             format!("{}://{}/{}/lu-res", scheme, &cfg_g.domain, b)
         } else {
             format!("{}://{}/lu-res", scheme, &cfg_g.domain)
@@ -77,9 +83,13 @@ async fn main() -> color_eyre::Result<()> {
     let rev = Box::leak(Box::new(ReverseLookup::new(data)));
 
     // Make the API
-    let api = warp::path("api").and(make_api(db, data, rev, lr.clone()));
+    let lu_json_path = cfg.data.lu_json_cache.clone();
+    let fallback_routes = make_fallback(lu_json_path);
 
-    let spa_path = cfg.data.explorer_spa;
+    let api_routes = make_api(db, data, rev, lr.clone());
+    let api = warp::path("api").and(fallback_routes.or(api_routes));
+
+    let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
 
     let index_text = std::fs::read_to_string(&spa_index)?;
@@ -96,11 +106,11 @@ async fn main() -> color_eyre::Result<()> {
     let spa_dynamic = make_spa_dynamic(data, hb, &cfg.general.domain);
 
     //let spa_file = warp::fs::file(spa_index);
-    let spa = warp::fs::dir(spa_path).or(spa_dynamic);
+    let spa = warp::fs::dir(spa_path.clone()).or(spa_dynamic);
 
     // Initialize the lu-res cache
     let res = warp::path("lu-res")
-        .and(warp::fs::dir(cfg.data.lu_res_cache))
+        .and(warp::fs::dir(cfg.data.lu_res_cache.clone()))
         .boxed();
 
     // Finally collect all routes
@@ -112,33 +122,9 @@ async fn main() -> color_eyre::Result<()> {
 
     let routes = auth.or(routes);
 
-    fn base_filter(
-        b: Option<String>,
-    ) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
-        if let Some(b) = b {
-            let base = warp::path(b);
-            warp::get().and(base).boxed()
-        } else {
-            warp::get().boxed()
-        }
-    }
+    let mut root = base_filter(cfg.general.base.as_deref()).boxed();
 
-    let canonical_domain = cfg.general.domain.clone();
-    let canonical_base = cfg.general.base.clone().unwrap_or_default();
-
-    let mut root = base_filter(cfg.general.base).boxed();
-
-    for host in &cfg.host {
-        let base = base_filter(host.base.clone());
-        if !host.redirect {
-            info!("Loading host {:?}", host);
-            root = warp::filters::host::exact(&host.name)
-                .and(base)
-                .or(root)
-                .unify()
-                .boxed();
-        }
-    }
+    root = add_host_filters(root, &cfg.host);
 
     let routes = root.and(routes).boxed();
 
@@ -146,33 +132,7 @@ async fn main() -> color_eyre::Result<()> {
         .and_then(|| async move { Err(warp::reject()) })
         .boxed();
 
-    for host in cfg.host {
-        if host.redirect {
-            info!("Loading redirect {:?}", host);
-            let base = base_filter(host.base);
-            let dom = canonical_domain.clone();
-            let bas = canonical_base.clone();
-            let new_redirect = base
-                .and(warp::filters::path::tail())
-                .map(move |path: Tail| {
-                    let mut new_path = String::from("/");
-                    new_path.push_str(&bas);
-                    if !new_path.ends_with('/') {
-                        new_path.push('/');
-                    }
-                    new_path.push_str(path.as_str());
-                    let uri = Uri::builder()
-                        .scheme("https")
-                        .authority(dom.as_str())
-                        .path_and_query(&new_path)
-                        .build()
-                        .unwrap();
-                    warp::redirect::permanent(uri)
-                })
-                .boxed();
-            redirect = redirect.or(new_redirect).unify().boxed();
-        }
-    }
+    redirect = add_redirect_filters(redirect, &cfg);
 
     let routes = redirect.or(routes);
     let log = warp::log("paradox::routes");

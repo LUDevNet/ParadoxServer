@@ -11,6 +11,10 @@ fn default_lu_res_cache() -> PathBuf {
     PathBuf::from("lu-res")
 }
 
+fn default_lu_json_cache() -> PathBuf {
+    PathBuf::from("lu-json")
+}
+
 #[derive(Deserialize)]
 pub struct CorsOptions {
     pub all: bool,
@@ -68,6 +72,9 @@ pub struct DataOptions {
     /// The lu-res cache path
     #[serde(default = "default_lu_res_cache")]
     pub lu_res_cache: PathBuf,
+    /// The lu-json cache path
+    #[serde(default = "default_lu_json_cache")]
+    pub lu_json_cache: PathBuf,
     /// The LU-Res prefix
     pub lu_res_prefix: Option<String>,
     /// The locale.xml file
