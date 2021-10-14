@@ -469,6 +469,11 @@ struct ObjectIDs<'a, T> {
     object_ids: &'a [T],
 }
 
+#[derive(Serialize)]
+struct ObjectTypeEmbedded<'a, 'b> {
+    objects: TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, &'b [i32]>,
+}
+
 fn rev_object_type_api(
     db: &TypedDatabase,
     rev: Rev,
@@ -481,7 +486,9 @@ fn rev_object_type_api(
             data: ObjectIDs {
                 object_ids: objects.as_ref(),
             },
-            embedded: TypedTableIterAdapter::<ObjectsRef, _, _>::new(&db.objects, objects),
+            embedded: ObjectTypeEmbedded {
+                objects: TypedTableIterAdapter::new(&db.objects, objects),
+            },
         };
         warp::reply::json(&rep)
     }))
