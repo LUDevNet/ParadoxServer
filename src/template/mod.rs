@@ -1,13 +1,24 @@
-use std::{borrow::Cow, convert::Infallible, fmt::Write, sync::Arc};
+use notify::event::{AccessKind, AccessMode, EventKind};
+use pin_project::pin_project;
+use std::{
+    borrow::Cow,
+    convert::Infallible,
+    ffi::OsStr,
+    fmt::Write,
+    path::Path,
+    sync::{Arc, RwLock},
+    task::Poll,
+};
 
-//use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use handlebars::Handlebars;
 use paradox_typed_db::{typed_ext::MissionKind, TypedDatabase};
 use regex::{Captures, Regex};
 use serde::Serialize;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::{debug, error, info};
 use warp::{path::FullPath, Filter};
 
-pub fn make_meta_template(text: &str) -> Cow<str> {
+fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
     re.replace_all(text, |cap: &Captures| {
         let kind = &cap[1];
@@ -26,19 +37,106 @@ pub fn make_meta_template(text: &str) -> Cow<str> {
     })
 }
 
+pub struct FsEventHandler {
+    tx: Sender<notify::Result<notify::Event>>,
+}
+
+impl FsEventHandler {
+    pub fn new(tx: Sender<notify::Result<notify::Event>>) -> Self {
+        Self { tx }
+    }
+}
+
+impl notify::EventHandler for FsEventHandler {
+    fn handle_event(&mut self, event: notify::Result<notify::Event>) {
+        self.tx.blocking_send(event).unwrap();
+    }
+}
+
+/// This is a future that completes when the incoming stream completes
+#[pin_project]
+pub struct TemplateUpdateTask {
+    rx: Receiver<notify::Result<notify::Event>>,
+    hb: Arc<RwLock<Handlebars<'static>>>,
+}
+
+impl TemplateUpdateTask {
+    pub fn new(
+        rx: Receiver<notify::Result<notify::Event>>,
+        hb: Arc<RwLock<Handlebars<'static>>>,
+    ) -> Self {
+        Self { rx, hb }
+    }
+}
+
+impl std::future::Future for TemplateUpdateTask {
+    type Output = ();
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        while let Poll::Ready(r) = this.rx.poll_recv(cx) {
+            let e = match r {
+                Some(Ok(e)) => e,
+                Some(Err(e)) => {
+                    tracing::error!("filesystem watch failure: {}", e);
+                    continue;
+                }
+                None => return Poll::Ready(()),
+            };
+
+            debug!("filesystem watch event: {:?}", e);
+            if e.kind != EventKind::Access(AccessKind::Close(AccessMode::Write)) {
+                continue;
+            }
+            for p in e.paths {
+                debug!("Updated file: {}", p.display());
+                if p.file_name() != Some(OsStr::new("index.html")) {
+                    continue;
+                }
+                if let Err(e) = load_meta_template(this.hb, &p) {
+                    error!("Failed to re-load template: {}", e);
+                }
+            }
+        }
+        Poll::Pending
+    }
+}
+
+pub fn load_meta_template(
+    reg: &RwLock<handlebars::Handlebars>,
+    path: &Path,
+) -> Result<(), color_eyre::Report> {
+    info!("(re-)loading template.html");
+    let index_text = std::fs::read_to_string(&path)?;
+    let tpl_str = make_meta_template(&index_text);
+    let mut hb = reg
+        .write()
+        .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire handlebars lock: {}", e))?;
+    hb.register_template_string("template.html", tpl_str)?;
+    Ok(())
+}
+
 pub struct WithTemplate<T: Serialize> {
     pub name: &'static str,
     pub value: T,
 }
 
-pub fn render<T>(template: WithTemplate<T>, hbs: Arc<Handlebars>) -> impl warp::Reply
+pub fn render<T>(template: WithTemplate<T>, hbs: Arc<RwLock<Handlebars>>) -> impl warp::Reply
 where
     T: Serialize,
 {
-    let render = hbs
-        .render(template.name, &template.value)
-        .unwrap_or_else(|err| err.to_string());
-    warp::reply::html(render)
+    match hbs.read() {
+        Ok(hb) => {
+            let render = hb
+                .render(template.name, &template.value)
+                .unwrap_or_else(|err| err.to_string());
+            warp::reply::html(render)
+        }
+        Err(e) => {
+            error!("Could not acquire lock on Handlebars Registry: {}", e);
+            warp::reply::html(String::from("Internal Server Error"))
+        }
+    }
 }
 
 /// Retrieve metadata for /missions/:id
@@ -252,7 +350,7 @@ fn meta<'r>(
 #[allow(clippy::needless_lifetimes)] // false positive?
 pub(crate) fn make_spa_dynamic<'r>(
     data: &'static TypedDatabase<'static>,
-    hb: Arc<Handlebars<'r>>,
+    hb: Arc<RwLock<Handlebars<'r>>>,
     domain: &str,
     //    hnd: ArcHandle<B, FDBHeader>,
 ) -> impl Filter<Extract = (impl warp::Reply,), Error = Infallible> + Clone + 'r {

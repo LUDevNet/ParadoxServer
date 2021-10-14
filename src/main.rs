@@ -1,4 +1,7 @@
-use std::{fs::File, sync::Arc};
+use std::{
+    fs::File,
+    sync::{Arc, RwLock},
+};
 
 use api::make_api;
 use assembly_data::{fdb::mem::Database, xml::localization::load_locale};
@@ -6,9 +9,11 @@ use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
 use handlebars::Handlebars;
 use mapr::Mmap;
+use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
 use structopt::StructOpt;
 use template::make_spa_dynamic;
+use tokio::runtime::Handle;
 use warp::{filters::BoxedFilter, Filter};
 
 mod api;
@@ -23,7 +28,7 @@ use crate::{
     api::rev_lookup::ReverseLookup,
     fallback::make_fallback,
     redirect::{add_host_filters, add_redirect_filters, base_filter},
-    template::make_meta_template,
+    template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
 
 #[tokio::main]
@@ -92,16 +97,20 @@ async fn main() -> color_eyre::Result<()> {
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
 
-    let index_text = std::fs::read_to_string(&spa_index)?;
-    let index_tpl_str = make_meta_template(&index_text);
+    // Create handlebars registry
+    let hb = Arc::new(RwLock::new(Handlebars::new()));
 
-    let mut hb = Handlebars::new();
-    // register the template
-    hb.register_template_string("template.html", index_tpl_str)?;
+    load_meta_template(&hb, &spa_index)?;
 
-    // Turn Handlebars instance into a Filter so we can combine it
-    // easily with others...
-    let hb = Arc::new(hb);
+    // Setup the watcher
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let eh = FsEventHandler::new(tx);
+    let mut watcher = recommended_watcher(eh)?;
+    watcher.watch(&spa_index, RecursiveMode::Recursive).unwrap();
+
+    let rt = Handle::current();
+
+    rt.spawn(TemplateUpdateTask::new(rx, hb.clone()));
 
     let spa_dynamic = make_spa_dynamic(data, hb, &cfg.general.domain);
 
