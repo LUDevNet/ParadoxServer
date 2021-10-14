@@ -1,7 +1,7 @@
 use assembly_core::buffer::CastError;
 use assembly_data::{fdb::common::Latin1Str, xml::localization::LocaleNode};
 use paradox_typed_db::{
-    typed_rows::{BehaviorTemplateRow, MissionTaskRow, MissionsRow, TypedRow},
+    typed_rows::{BehaviorTemplateRow, MissionTaskRow, MissionsRow, ObjectsRef, TypedRow},
     typed_tables::{BehaviorParameterTable, BehaviorTemplateTable, MissionTasksTable},
     TypedDatabase,
 };
@@ -464,18 +464,27 @@ fn rev_mission_types_full_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, Cas
     Ok(warp::reply::json(&rev.inner.mission_types))
 }
 
+#[derive(Serialize)]
+struct ObjectIDs<'a, T> {
+    object_ids: &'a [T],
+}
+
 fn rev_object_type_api(
-    _db: &TypedDatabase,
+    db: &TypedDatabase,
     rev: Rev,
     ty: PercentDecoded,
 ) -> Result<Option<Json>, CastError> {
     let key: &String = ty.borrow();
     tracing::info!("{}", key);
-    Ok(rev
-        .inner
-        .object_types
-        .get(key)
-        .map(|objects| warp::reply::json(&objects)))
+    Ok(rev.inner.object_types.get(key).map(|objects| {
+        let rep = Api {
+            data: ObjectIDs {
+                object_ids: objects.as_ref(),
+            },
+            embedded: TypedTableIterAdapter::<ObjectsRef, _, _>::new(&db.objects, objects),
+        };
+        warp::reply::json(&rep)
+    }))
 }
 
 fn rev_object_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
