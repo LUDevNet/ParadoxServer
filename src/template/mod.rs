@@ -1,4 +1,4 @@
-use notify::event::{AccessKind, AccessMode, EventKind};
+use notify::event::{AccessKind, AccessMode, EventKind, RemoveKind};
 use pin_project::pin_project;
 use std::{
     borrow::Cow,
@@ -85,7 +85,11 @@ impl std::future::Future for TemplateUpdateTask {
             };
 
             debug!("filesystem watch event: {:?}", e);
-            if e.kind != EventKind::Access(AccessKind::Close(AccessMode::Write)) {
+            if !matches!(
+                e.kind,
+                EventKind::Access(AccessKind::Close(AccessMode::Write))
+                    | EventKind::Remove(RemoveKind::File)
+            ) {
                 continue;
             }
             for p in e.paths {
