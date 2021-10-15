@@ -12,8 +12,9 @@ use std::{
     convert::Infallible,
 };
 use warp::{
+    filters::BoxedFilter,
     reply::{Json, WithStatus},
-    Filter, Rejection,
+    Filter,
 };
 
 use crate::{
@@ -141,10 +142,15 @@ pub struct BehaviorKeyIndex {
     used_by: BTreeSet<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct ComponentUse {
-    id: i32,
-    component_id: i32,
+    lots: Vec<i32>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ComponentsUse {
+    /// Map from component_id to list of object_id
+    components: BTreeMap<i32, ComponentUse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,7 +161,7 @@ pub struct ReverseLookup {
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
 
     pub object_types: BTreeMap<String, Vec<i32>>,
-    pub component_use: BTreeMap<i32, BTreeMap<i32, Vec<i32>>>,
+    pub component_use: BTreeMap<i32, ComponentsUse>,
 }
 
 impl ReverseLookup {
@@ -222,14 +228,14 @@ impl ReverseLookup {
             entry.push(id);
         }
 
-        let mut component_use: BTreeMap<i32, BTreeMap<i32, Vec<i32>>> = BTreeMap::new();
+        let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
         for creg in db.comp_reg.row_iter() {
             let id = creg.id();
             let ty = creg.component_type();
             let cid = creg.component_id();
             let ty_entry = component_use.entry(ty).or_default();
-            let co_entry = ty_entry.entry(cid).or_default();
-            co_entry.push(id);
+            let co_entry = ty_entry.components.entry(cid).or_default();
+            co_entry.lots.push(id);
         }
 
         let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
@@ -499,6 +505,40 @@ fn rev_object_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError
     Ok(warp::reply::json(&keys))
 }
 
+#[derive(Serialize)]
+struct Components {
+    components: Vec<i32>,
+}
+
+fn rev_component_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
+    let components: Vec<i32> = rev.inner.component_use.keys().copied().collect();
+    let val = Components { components };
+    Ok(warp::reply::json(&val))
+}
+
+fn rev_component_type_api(
+    _db: &TypedDatabase,
+    rev: Rev,
+    key: i32,
+) -> Result<Option<Json>, CastError> {
+    let val = rev.inner.component_use.get(&key);
+    Ok(val.map(warp::reply::json))
+}
+
+fn rev_single_component_api(
+    _db: &TypedDatabase,
+    rev: Rev,
+    key: i32,
+    cid: i32,
+) -> Result<Option<Json>, CastError> {
+    let val = rev
+        .inner
+        .component_use
+        .get(&key)
+        .and_then(|c| c.components.get(&cid));
+    Ok(val.map(warp::reply::json))
+}
+
 fn rev_behavior_api(db: &TypedDatabase, rev: Rev, behavior_id: i32) -> Result<Json, CastError> {
     let data = rev.inner.behaviors.get(&behavior_id);
     let set = rev.inner.get_behavior_set(behavior_id);
@@ -540,20 +580,25 @@ fn rev_filter<'a>(
     warp::any().map(move || Rev { inner })
 }
 
-pub(super) fn make_api_rev<'r>(
-    db: &'r TypedDatabase<'r>,
-    rev: &'r ReverseLookup,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Rejection> + Clone + Send + 'r {
-    let db = tydb_filter(db);
-    let rev = db.and(rev_filter(rev));
+type Ext = (&'static TypedDatabase<'static>, Rev<'static>);
 
+fn skill_api<F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static>(
+    rev: &F,
+) -> BoxedFilter<(WithStatus<Json>,)> {
     let rev_skill_ids = rev.clone().and(warp::path("skill_ids"));
     let rev_skill_id_base = rev_skill_ids.and(warp::path::param::<i32>());
     let rev_skill_id = rev_skill_id_base
         .and(warp::path::end())
         .map(rev_skill_id_api)
         .map(map_res);
+    rev_skill_id.boxed()
+}
 
+fn mission_types_api<
+    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
+>(
+    rev: &F,
+) -> BoxedFilter<(WithStatus<Json>,)> {
     let rev_mission_types_base = rev.clone().and(warp::path("mission_types"));
 
     let rev_mission_types_full = rev_mission_types_base
@@ -561,14 +606,16 @@ pub(super) fn make_api_rev<'r>(
         .and(warp::path("full"))
         .and(warp::path::end())
         .map(rev_mission_types_full_api)
-        .map(map_res);
+        .map(map_res)
+        .boxed();
 
     let rev_mission_type = rev_mission_types_base
         .clone()
         .and(warp::path::param())
         .and(warp::path::end())
         .map(rev_mission_type_api)
-        .map(map_res);
+        .map(map_res)
+        .boxed();
 
     let rev_mission_subtype = rev_mission_types_base
         .clone()
@@ -576,13 +623,15 @@ pub(super) fn make_api_rev<'r>(
         .and(warp::path::param())
         .and(warp::path::end())
         .map(rev_mission_subtype_api)
-        .map(map_res);
+        .map(map_res)
+        .boxed();
 
     let rev_mission_types_list = rev_mission_types_base
         .clone()
         .and(warp::path::end())
         .map(rev_mission_types_api)
-        .map(map_res);
+        .map(map_res)
+        .boxed();
 
     let rev_mission_types = rev_mission_types_full
         .or(rev_mission_type)
@@ -592,6 +641,53 @@ pub(super) fn make_api_rev<'r>(
         .or(rev_mission_types_list)
         .unify();
 
+    rev_mission_types.boxed()
+}
+
+fn component_types_api<
+    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
+>(
+    rev: &F,
+) -> BoxedFilter<(WithStatus<Json>,)> {
+    let rev_component_types_base = rev.clone().and(warp::path("component_types"));
+
+    let rev_single_component_type = rev_component_types_base
+        .clone()
+        .and(warp::path::param())
+        .and(warp::path::param())
+        .and(warp::path::end())
+        .map(rev_single_component_api)
+        .map(map_opt_res)
+        .boxed();
+
+    let rev_component_type = rev_component_types_base
+        .clone()
+        .and(warp::path::param())
+        .and(warp::path::end())
+        .map(rev_component_type_api)
+        .map(map_opt_res)
+        .boxed();
+
+    let rev_component_types_list = rev_component_types_base
+        .clone()
+        .and(warp::path::end())
+        .map(rev_component_types_api)
+        .map(map_res)
+        .boxed();
+
+    rev_single_component_type
+        .or(rev_component_type)
+        .unify()
+        .or(rev_component_types_list)
+        .unify()
+        .boxed()
+}
+
+fn object_types_api<
+    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
+>(
+    rev: &F,
+) -> BoxedFilter<(WithStatus<Json>,)> {
     let rev_object_types_base = rev.clone().and(warp::path("object_types"));
 
     let rev_object_type = rev_object_types_base
@@ -599,16 +695,22 @@ pub(super) fn make_api_rev<'r>(
         .and(warp::path::param())
         .and(warp::path::end())
         .map(rev_object_type_api)
-        .map(map_opt_res);
+        .map(map_opt_res)
+        .boxed();
 
     let rev_object_types_list = rev_object_types_base
         .clone()
         .and(warp::path::end())
         .map(rev_object_types_api)
-        .map(map_res);
+        .map(map_res)
+        .boxed();
 
-    let rev_object_types = rev_object_type.or(rev_object_types_list).unify();
+    rev_object_type.or(rev_object_types_list).unify().boxed()
+}
 
+fn behaviors_api<F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static>(
+    rev: &F,
+) -> BoxedFilter<(WithStatus<Json>,)> {
     let rev_behaviors = rev.clone().and(warp::path("behaviors"));
     let rev_behavior_id_base = rev_behaviors.and(warp::path::param::<i32>());
     let rev_behavior_id = rev_behavior_id_base
@@ -616,14 +718,38 @@ pub(super) fn make_api_rev<'r>(
         .map(rev_behavior_api)
         .map(map_res);
 
-    let first = rev.clone().and(warp::path::end()).map(rev_api).map(map_res);
+    rev_behavior_id.boxed()
+}
+
+pub(super) fn make_api_rev(
+    db: &'static TypedDatabase<'static>,
+    rev: &'static ReverseLookup,
+) -> BoxedFilter<(WithStatus<Json>,)> {
+    let db = tydb_filter(db);
+    let rev = db.and(rev_filter(rev));
+
+    let rev_skills = skill_api(&rev);
+    let rev_mission_types = mission_types_api(&rev);
+    let rev_object_types = object_types_api(&rev);
+    let rev_component_types = component_types_api(&rev);
+    let rev_behaviors = behaviors_api(&rev);
+
+    let first = rev
+        .clone()
+        .and(warp::path::end())
+        .map(rev_api)
+        .map(map_res)
+        .boxed();
     first
-        .or(rev_skill_id)
+        .or(rev_skills)
         .unify()
         .or(rev_mission_types)
         .unify()
         .or(rev_object_types)
         .unify()
-        .or(rev_behavior_id)
+        .or(rev_component_types)
         .unify()
+        .or(rev_behaviors)
+        .unify()
+        .boxed()
 }

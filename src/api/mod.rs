@@ -147,7 +147,7 @@ pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::J
 
 pub(crate) fn make_api<'a>(
     db: Database<'a>,
-    tydb: &'static TypedDatabase<'a>,
+    tydb: &'static TypedDatabase<'static>,
     rev: &'static ReverseLookup,
     lr: Arc<LocaleNode>,
 ) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + 'a {
