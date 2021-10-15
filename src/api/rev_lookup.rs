@@ -475,9 +475,12 @@ struct ObjectIDs<'a, T> {
     object_ids: &'a [T],
 }
 
+type ObjectsRefAdapter<'a, 'b> =
+    TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, &'b [i32]>;
+
 #[derive(Serialize)]
 struct ObjectTypeEmbedded<'a, 'b> {
-    objects: TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, &'b [i32]>,
+    objects: ObjectsRefAdapter<'a, 'b>,
 }
 
 fn rev_object_type_api(
@@ -522,7 +525,17 @@ fn rev_component_type_api(
     key: i32,
 ) -> Result<Option<Json>, CastError> {
     let val = rev.inner.component_use.get(&key);
-    Ok(val.map(warp::reply::json))
+    Ok(val.map(|data| {
+        let keys: Vec<i32> = data
+            .components
+            .iter()
+            .flat_map(|(_, u)| u.lots.iter().copied())
+            .collect();
+        let embedded = ObjectTypeEmbedded {
+            objects: ObjectsRefAdapter::new(&_db.objects, &keys),
+        };
+        warp::reply::json(&Api { data, embedded })
+    }))
 }
 
 fn rev_single_component_api(
