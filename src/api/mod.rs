@@ -17,12 +17,12 @@ use warp::{
 
 use self::{
     adapter::{LocaleAll, LocalePod},
-    rev_lookup::{make_api_rev, ReverseLookup},
+    rev::{make_api_rev, ReverseLookup},
     tables::{make_api_tables, tables_api},
 };
 
 pub mod adapter;
-pub mod rev_lookup;
+pub mod rev;
 pub mod tables;
 
 #[derive(Clone, Debug)]
