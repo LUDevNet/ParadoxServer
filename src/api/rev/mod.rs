@@ -1,3 +1,8 @@
+//! # Reverse API `/rev`
+//!
+//! This module contains the reverse API of the server. These are, generally speaking,
+//! database lookups by some specific ID such as an "object template id" or a "skill id"
+//! and produce data from multiple tables.
 use assembly_core::buffer::CastError;
 use assembly_data::xml::localization::LocaleNode;
 use paradox_typed_db::{

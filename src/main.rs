@@ -80,11 +80,8 @@ async fn main() -> color_eyre::Result<()> {
     });
 
     let lu_res_prefix = Box::leak(lu_res.clone().into_boxed_str());
-    let data = Box::leak(Box::new(TypedDatabase::new(
-        lr.clone(),
-        lu_res_prefix,
-        tables,
-    )));
+    let tydb = TypedDatabase::new(lr.clone(), lu_res_prefix, tables)?;
+    let data = Box::leak(Box::new(tydb));
     let rev = Box::leak(Box::new(ReverseLookup::new(data)));
 
     // Make the API

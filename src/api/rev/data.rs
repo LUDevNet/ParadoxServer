@@ -1,3 +1,13 @@
+//! # Index structures
+//!
+//! This module contains reverse index structures. It uses an in memory FDB
+//! instance to create an (owned) `ReverseLookup` struct. This struct can then
+//! be used to access the data in the FDB - potentially faster than scanning
+//! it on every request.
+//!
+//! The [`ReverseLookup::new`] function is called once at startup of the server
+//! and the result is passed to the API filters.
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use assembly_data::fdb::common::Latin1Str;
@@ -40,6 +50,24 @@ pub struct MissionTaskUIDLookup {
     pub mission: i32,
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+/// All data associated with a specific activity ID
+pub struct ActivityRev {
+    /// IDs of the RebuildComponent with matching `activityID`
+    rebuild: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LootTableItem {
+    pub itemid: i32,
+    pub id: i32,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct LootTableIndexRev {
+    pub items: Vec<LootTableItem>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
@@ -49,6 +77,8 @@ pub struct ReverseLookup {
 
     pub object_types: BTreeMap<String, Vec<i32>>,
     pub component_use: BTreeMap<i32, ComponentsUse>,
+    pub activities: BTreeMap<i32, ActivityRev>,
+    pub loot_table_index: BTreeMap<i32, LootTableIndexRev>,
 }
 
 impl ReverseLookup {
@@ -146,6 +176,24 @@ impl ReverseLookup {
             behaviors.entry(bid).or_default().skill.insert(skid);
         }
 
+        let mut activities: BTreeMap<i32, ActivityRev> = BTreeMap::new();
+        for r in db.rebuild_component.row_iter() {
+            let id = r.id();
+            if let Some(aid) = r.activity_id() {
+                let entry = activities.entry(aid).or_default();
+                entry.rebuild.push(id);
+            }
+        }
+
+        let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
+        for l in db.loot_table.row_iter() {
+            let lti = l.loot_table_index();
+            let itemid = l.itemid();
+            let id = l.id();
+            let entry = loot_table_index.entry(lti).or_default();
+            entry.items.push(LootTableItem { itemid, id });
+        }
+
         Self {
             behaviors,
             skill_ids,
@@ -154,6 +202,8 @@ impl ReverseLookup {
 
             object_types,
             component_use,
+            activities,
+            loot_table_index,
         }
     }
 
