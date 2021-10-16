@@ -25,7 +25,7 @@ mod redirect;
 mod template;
 
 use crate::{
-    api::rev_lookup::ReverseLookup,
+    api::rev::ReverseLookup,
     fallback::make_fallback,
     redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
