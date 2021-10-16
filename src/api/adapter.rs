@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use assembly_data::xml::localization::LocaleNode;
 use paradox_typed_db::typed_rows::TypedRow;
 use serde::{ser::SerializeMap, Serialize};
@@ -9,6 +11,12 @@ pub(crate) trait FindHash {
 impl<T: FindHash> FindHash for &T {
     fn find_hash(&self, v: i32) -> Option<i32> {
         (*self).find_hash(v)
+    }
+}
+
+impl FindHash for BTreeMap<i32, i32> {
+    fn find_hash(&self, v: i32) -> Option<i32> {
+        self.get(&v).copied()
     }
 }
 
