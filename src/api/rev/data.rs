@@ -57,15 +57,18 @@ pub struct ActivityRev {
     rebuild: Vec<i32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct LootTableItem {
-    pub itemid: i32,
-    pub id: i32,
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct LootTableIndexRev {
+    /// This is a map from `LootTable::id` to `LootTable::itemid` for the current LootTableIndex
+    pub items: BTreeMap<i32, i32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-pub struct LootTableIndexRev {
-    pub items: Vec<LootTableItem>,
+pub struct FactionRev {
+    /// DestructibleComponents have the current ID in `factionList`
+    pub destructible_list: Vec<i32>,
+    /// DestructibleComponents have the current ID in `faction`
+    pub destructible: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,7 +194,21 @@ impl ReverseLookup {
             let itemid = l.itemid();
             let id = l.id();
             let entry = loot_table_index.entry(lti).or_default();
-            entry.items.push(LootTableItem { itemid, id });
+            entry.items.insert(id, itemid);
+        }
+
+        let mut factions: BTreeMap<i32, FactionRev> = BTreeMap::new();
+        for d in db.destructible_component.row_iter() {
+            if let Some(faction) = d.faction() {
+                let entry = factions.entry(faction).or_default();
+                entry.destructible.push(d.id());
+            }
+
+            let faction_list: i32 = d.faction_list().decode().parse().unwrap();
+            if faction_list >= 0 {
+                let entry = factions.entry(faction_list).or_default();
+                entry.destructible_list.push(d.id());
+            }
         }
 
         Self {
