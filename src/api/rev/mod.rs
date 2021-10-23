@@ -18,6 +18,7 @@ mod data;
 
 mod behaviors;
 mod component_types;
+mod loot_table_index;
 mod missions;
 mod object_types;
 mod skills;
@@ -69,6 +70,7 @@ pub(super) fn make_api_rev(
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_component_types = component_types::component_types_api(&rev);
     let rev_behaviors = behaviors::behaviors_api(&rev);
+    let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
 
     let first = rev
         .clone()
@@ -86,6 +88,8 @@ pub(super) fn make_api_rev(
         .or(rev_component_types)
         .unify()
         .or(rev_behaviors)
+        .unify()
+        .or(rev_loot_table_index)
         .unify()
         .boxed()
 }

@@ -1,5 +1,8 @@
 use super::{common::MissionTasks, Api, Ext, Rev};
-use crate::api::map_res;
+use crate::api::{
+    adapter::{AdapterLayout, I32Slice},
+    map_res,
+};
 use assembly_core::buffer::CastError;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
@@ -21,9 +24,10 @@ fn rev_skill_id_api(db: &'_ TypedDatabase, rev: Rev, skill_id: i32) -> Result<Js
     let h = rev.inner.skill_ids.get(&skill_id).map(|data| {
         let mission_tasks = MissionTasks {
             index: &rev.inner.mission_task_uids,
-            keys: &data.mission_tasks[..],
+            keys: I32Slice(&data.mission_tasks[..]),
             table: &db.mission_tasks,
             id_col: db.mission_tasks.col_uid,
+            layout: AdapterLayout::Map,
         };
         Api {
             data,
