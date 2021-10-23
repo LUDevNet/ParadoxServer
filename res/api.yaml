@@ -48,6 +48,21 @@ components:
           type: array
           items:
             type: string
+    LootTable:
+      type: array
+      items:
+        type: object
+        properties:
+          itemid:
+            type: number
+          LootTableIndex:
+            type: number
+          id:
+            type: number
+          MissionDrop:
+            type: boolean
+          sortPriority:
+            type: number
     ErrorModel:
       type: number
 paths:
@@ -217,6 +232,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Behavior"
+    parameters:
+      - in: path
+        required: true
+        name: id
+        schema:
+          type: number
+  "/v0/rev/loot_table_index/{id}":
+    get:
+      description: Get data from the `LootTable` by `Index`
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  loot_table:
+                    $ref: "#/components/schemas/LootTable"
     parameters:
       - in: path
         required: true

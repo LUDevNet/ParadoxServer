@@ -6,7 +6,7 @@ use paradox_typed_db::{
 };
 use serde::Serialize;
 
-use crate::api::adapter::{FindHash, IdentityHash, TypedTableIterAdapter};
+use crate::api::adapter::{FindHash, I32Slice, IdentityHash, TypedTableIterAdapter};
 
 use super::data::MissionTaskUIDLookup;
 
@@ -17,7 +17,7 @@ pub struct MapFilter<'a, E> {
 }
 
 pub(super) type ObjectsRefAdapter<'a, 'b> =
-    TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, &'b [i32]>;
+    TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, I32Slice<'b>>;
 
 #[derive(Serialize)]
 pub(super) struct ObjectTypeEmbedded<'a, 'b> {
@@ -44,7 +44,7 @@ impl<'a, E: Serialize> Serialize for MapFilter<'a, E> {
 pub(super) type MissionTaskHash<'b> = &'b HashMap<i32, MissionTaskUIDLookup>;
 
 pub(super) type MissionTasks<'a, 'b> =
-    TypedTableIterAdapter<'a, 'b, MissionTaskRow<'a, 'b>, MissionTaskHash<'b>, &'b [i32]>;
+    TypedTableIterAdapter<'a, 'b, MissionTaskRow<'a, 'b>, MissionTaskHash<'b>, I32Slice<'b>>;
 
 pub(super) struct MissionTaskIconsAdapter<'a, 'b> {
     table: &'b MissionTasksTable<'a>,
@@ -63,12 +63,15 @@ impl<'a, 'b> Serialize for MissionTaskIconsAdapter<'a, 'b> {
 #[derive(Clone)]
 pub(super) struct MissionsTaskIconsAdapter<'a, 'b> {
     table: &'b MissionTasksTable<'a>,
-    keys: &'b [i32],
+    keys: I32Slice<'b>,
 }
 
 impl<'a, 'b> MissionsTaskIconsAdapter<'a, 'b> {
     pub fn new(table: &'b MissionTasksTable<'a>, keys: &'b [i32]) -> Self {
-        Self { table, keys }
+        Self {
+            table,
+            keys: I32Slice(keys),
+        }
     }
 }
 
@@ -77,7 +80,7 @@ impl<'a, 'b> Serialize for MissionsTaskIconsAdapter<'a, 'b> {
     where
         S: serde::Serializer,
     {
-        serializer.collect_map(self.keys.iter().copied().map(|key| {
+        serializer.collect_map(self.keys.into_iter().map(|key| {
             (
                 key,
                 MissionTaskIconsAdapter {
