@@ -11,7 +11,7 @@ use warp::{
 };
 
 use crate::api::{
-    adapter::{IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
+    adapter::{I32Slice, IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
     map_res, PercentDecoded,
 };
 
@@ -72,7 +72,7 @@ impl<'b> MissionLocale<'b> {
 }
 
 type MissionsAdapter<'a, 'b> =
-    TypedTableIterAdapter<'a, 'b, MissionsRow<'a, 'b>, IdentityHash, &'b [i32]>;
+    TypedTableIterAdapter<'a, 'b, MissionsRow<'a, 'b>, IdentityHash, I32Slice<'b>>;
 
 /// This is the root type that holds all embedded value for the `mission_types` lookup
 #[derive(Clone, Serialize)]

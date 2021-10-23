@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::iter::Copied;
+use std::slice::Iter;
 
 use assembly_data::xml::localization::LocaleNode;
 use paradox_typed_db::typed_rows::TypedRow;
@@ -29,21 +31,43 @@ impl FindHash for IdentityHash {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub(super) struct I32Slice<'b>(pub(crate) &'b [i32]);
+
+impl<'b> IntoIterator for I32Slice<'b> {
+    type IntoIter = Copied<Iter<'b, i32>>;
+    type Item = i32;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().copied()
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AdapterLayout {
+    Seq,
+    Map,
+}
+
 #[derive(Clone)]
 pub(crate) struct TypedTableIterAdapter<'a, 'b, R: TypedRow<'a, 'b>, F, K> {
+    /// A structure mapping IDs to primary keys
     pub index: F,
     pub keys: K,
     pub table: &'b R::Table,
+    /// This needs to be the column that is the input to `F`
     pub id_col: usize,
+    pub layout: AdapterLayout,
 }
 
-impl<'a, 'b, R: TypedRow<'a, 'b>> TypedTableIterAdapter<'a, 'b, R, IdentityHash, &'b [i32]> {
+impl<'a, 'b, R: TypedRow<'a, 'b>> TypedTableIterAdapter<'a, 'b, R, IdentityHash, I32Slice<'b>> {
     pub fn new(table: &'b R::Table, keys: &'b [i32]) -> Self {
         Self {
             index: IdentityHash,
-            keys,
+            keys: I32Slice(keys),
             table,
             id_col: 0,
+            layout: AdapterLayout::Map,
         }
     }
 }
@@ -53,13 +77,16 @@ impl<'b, 'a: 'b, R: TypedRow<'a, 'b> + 'b, F, K> Serialize
 where
     R: Serialize,
     F: FindHash + Copy + 'b,
-    K: IntoIterator<Item = &'b i32> + Copy + 'b,
+    K: IntoIterator<Item = i32> + Clone + 'b,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.collect_map(self.to_iter(self.id_col))
+        match self.layout {
+            AdapterLayout::Seq => serializer.collect_seq(self.to_iter(self.id_col).map(|(_, r)| r)),
+            AdapterLayout::Map => serializer.collect_map(self.to_iter(self.id_col)),
+        }
     }
 }
 
@@ -70,14 +97,14 @@ where
     pub(crate) fn to_iter(&self, id_col: usize) -> impl Iterator<Item = (i32, R)> + 'b
     where
         F: FindHash + Copy + 'b,
-        K: IntoIterator<Item = &'b i32> + Copy + 'b,
+        K: IntoIterator<Item = i32> + Clone + 'b,
     {
-        let t: &'b R::Table = self.table;
+        let table: &'b R::Table = self.table;
         let i = self.index;
-        let iter = self.keys.into_iter().copied();
+        let iter = self.keys.clone().into_iter();
         let mapper = move |key| {
-            let index = i.find_hash(key)?;
-            let r = R::get(t, index, key, id_col)?;
+            let hash = i.find_hash(key)?;
+            let r = R::get(table, hash, key, id_col)?;
             Some((key, r))
         };
         iter.filter_map(mapper)
