@@ -9,8 +9,9 @@ use assembly_data::fdb::{
 use linked_hash_map::LinkedHashMap;
 use serde::{ser::SerializeSeq, Serialize};
 use warp::{
+    filters::BoxedFilter,
     reply::{Json, WithStatus},
-    Filter, Rejection,
+    Filter,
 };
 
 use super::{db_filter, map_opt_res, map_res};
@@ -197,9 +198,7 @@ fn table_key_api(db: Database<'_>, name: String, key: String) -> Result<Option<J
     Ok(Some(warp::reply::json(&RowIter { cols, to_rows })))
 }
 
-pub(super) fn make_api_tables(
-    db: Database<'_>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Rejection> + Clone + Send + '_
+pub(super) fn make_api_tables(db: Database<'static>) -> BoxedFilter<(WithStatus<Json>,)>
 //where
     //H: Filter<Extract = (ArcHandle<B, FDBHeader>,), Error = Infallible> + Clone + Send,
 {
@@ -239,4 +238,5 @@ pub(super) fn make_api_tables(
         .unify()
         .or(table_get)
         .unify()
+        .boxed()
 }

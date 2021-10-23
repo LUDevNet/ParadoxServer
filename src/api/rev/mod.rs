@@ -35,7 +35,13 @@ pub struct Api<T, E> {
 }
 
 fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
-    Ok(warp::reply::json(&["skill_ids"]))
+    Ok(warp::reply::json(&[
+        "behaviors",
+        "component_types",
+        "mission_types",
+        "object_types",
+        "skill_ids",
+    ]))
 }
 
 #[derive(Debug, Copy, Clone)]

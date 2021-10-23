@@ -12,6 +12,14 @@ use warp::{
 
 use crate::config::AuthConfig;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum AuthKind {
+    /// No authentication
+    None,
+    /// HTTP Basic Auth
+    Basic,
+}
+
 #[derive(Clone)]
 pub enum AuthImpl {
     None,
