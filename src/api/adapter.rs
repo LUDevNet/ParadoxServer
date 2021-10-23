@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 use std::iter::Copied;
 use std::slice::Iter;
+use std::{collections::BTreeMap, fmt};
 
 use assembly_data::xml::localization::LocaleNode;
 use paradox_typed_db::typed_rows::TypedRow;
@@ -147,6 +147,30 @@ pub(super) struct LocalePod<'a> {
     pub str_keys: Vec<&'a str>,
 }
 
+struct WithSuffix<'a, T> {
+    suffix: &'a str,
+    value: &'a T,
+}
+
+impl<'a, T> WithSuffix<'a, T> {
+    pub fn new(value: &'a T, suffix: &'a str) -> Self {
+        Self { suffix, value }
+    }
+}
+
+impl<'a, T: fmt::Display + Serialize> Serialize for WithSuffix<'a, T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.suffix.is_empty() {
+            self.value.serialize(serializer)
+        } else {
+            format!("{}{}", self.value, self.suffix).serialize(serializer)
+        }
+    }
+}
+
 pub(super) struct LocaleAll<'a> {
     inner: &'a LocaleNode,
 }
@@ -154,6 +178,27 @@ pub(super) struct LocaleAll<'a> {
 impl<'a> LocaleAll<'a> {
     pub fn new(inner: &'a LocaleNode) -> Self {
         Self { inner }
+    }
+
+    pub fn new_inner(mut inner: &'a LocaleNode) -> (String, Self) {
+        let mut suffix = String::new();
+        loop {
+            let v_count = if inner.value.is_some() { 1 } else { 0 };
+            let i_count = inner.int_children.len();
+            let s_count = inner.str_children.len();
+
+            let count = v_count + i_count + s_count;
+            if count == 1 && s_count == 1 {
+                // Flatten string keys into one string
+                let (key, value) = inner.str_children.iter().next().unwrap();
+                suffix.push('_');
+                suffix.push_str(key);
+                inner = value;
+                continue;
+            }
+            break;
+        }
+        (suffix, Self { inner })
     }
 }
 
@@ -167,16 +212,19 @@ impl<'a> Serialize for LocaleAll<'a> {
         let s_count = self.inner.str_children.len();
         let count = v_count + i_count + s_count;
 
-        if i_count + s_count > 0 {
+        let sub_count = i_count + s_count;
+        if sub_count > 0 {
             let mut m = serializer.serialize_map(Some(count))?;
             if let Some(v) = &self.inner.value {
                 m.serialize_entry(&"$value", v)?;
             }
             for (key, inner) in &self.inner.int_children {
-                m.serialize_entry(key, &Self { inner })?;
+                let value = LocaleAll::new(inner);
+                m.serialize_entry(&key, &value)?;
             }
             for (key, inner) in &self.inner.str_children {
-                m.serialize_entry(key, &Self { inner })?;
+                let (suffix, value) = LocaleAll::new_inner(inner);
+                m.serialize_entry(&WithSuffix::new(&key, &suffix), &value)?;
             }
             m.end()
         } else if let Some(v) = &self.inner.value {
