@@ -10,12 +10,15 @@ handlebars = "3.5"
 pretty_env_logger = "0.4.0"
 structopt = "0.3.21"
 color-eyre = "0.5.10"
+#indexmap = "1"
 mapr = "0.8.0"
 notify = "5.0.0-pre.13"
+openapiv3 = "0.5"
 paradox-typed-db = { git = "https://github.com/Xiphoseer/paradox-typed-db.git"  }
 percent-encoding = "2.1.0"
 pin-project = "1.0"
 regex = "1.4"
+serde_yaml = "0.8"
 toml = "0.5"
 tracing = "0.1"
 
@@ -44,3 +47,7 @@ features = ["rt-multi-thread", "macros", "signal"]
 [dependencies.serde]
 version = "1"
 features = ["derive"]
+
+[build-dependencies]
+openapiv3 = "0.5"
+serde_yaml = "0.8"

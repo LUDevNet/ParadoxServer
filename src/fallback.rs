@@ -1,11 +1,9 @@
 use std::path::PathBuf;
 
 use tracing::info;
-use warp::{fs::File, Filter, Rejection};
+use warp::{filters::BoxedFilter, fs::File, Filter};
 
-pub fn make_fallback(
-    lu_json_path: PathBuf,
-) -> impl Filter<Extract = (File,), Error = Rejection> + Clone {
+pub fn make_fallback(lu_json_path: PathBuf) -> BoxedFilter<(File,)> {
     let maps_dir = lu_json_path.join("maps");
     info!("Maps on '{}'", maps_dir.display());
     let maps = warp::path("maps").and(warp::fs::dir(maps_dir));

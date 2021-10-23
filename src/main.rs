@@ -1,5 +1,6 @@
 use std::{
     fs::File,
+    str::FromStr,
     sync::{Arc, RwLock},
 };
 
@@ -14,7 +15,7 @@ use paradox_typed_db::TypedDatabase;
 use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tokio::runtime::Handle;
-use warp::{filters::BoxedFilter, Filter};
+use warp::{filters::BoxedFilter, hyper::Uri, path::FullPath, Filter, Reply};
 
 mod api;
 mod auth;
@@ -26,6 +27,8 @@ mod template;
 
 use crate::{
     api::rev::ReverseLookup,
+    auth::AuthKind,
+    config::AuthConfig,
     fallback::make_fallback,
     redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
@@ -71,13 +74,17 @@ async fn main() -> color_eyre::Result<()> {
     };
 
     let cfg_g = &cfg.general;
-    let lu_res = cfg.data.lu_res_prefix.clone().unwrap_or_else(|| {
-        if let Some(b) = cfg_g.base.as_deref() {
-            format!("{}://{}/{}/lu-res", scheme, &cfg_g.domain, b)
-        } else {
-            format!("{}://{}/lu-res", scheme, &cfg_g.domain)
-        }
-    });
+    let canonical_base_url = if let Some(b) = cfg_g.base.as_deref() {
+        format!("{}://{}/{}", scheme, &cfg_g.domain, b)
+    } else {
+        format!("{}://{}", scheme, &cfg_g.domain)
+    };
+
+    let lu_res = cfg
+        .data
+        .lu_res_prefix
+        .clone()
+        .unwrap_or_else(|| format!("{}/lu-res", canonical_base_url));
 
     let lu_res_prefix = Box::leak(lu_res.clone().into_boxed_str());
     let tydb = TypedDatabase::new(lr.clone(), lu_res_prefix, tables)?;
@@ -88,8 +95,28 @@ async fn main() -> color_eyre::Result<()> {
     let lu_json_path = cfg.data.lu_json_cache.clone();
     let fallback_routes = make_fallback(lu_json_path);
 
-    let api_routes = make_api(db, data, rev, lr.clone());
-    let api = warp::path("api").and(fallback_routes.or(api_routes));
+    let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_) })) {
+        AuthKind::Basic
+    } else {
+        AuthKind::None
+    };
+    let api_url = format!("{}/api/", canonical_base_url);
+    let api_uri = Uri::from_str(&api_url).unwrap();
+
+    let api_file = include_str!("../res/api.html");
+    let api_swagger = warp::path::end()
+        .and(warp::path::full())
+        .map(move |path: FullPath| {
+            if path.as_str().ends_with('/') {
+                warp::reply::html(api_file).into_response()
+            } else {
+                warp::redirect(api_uri.clone()).into_response()
+            }
+        })
+        .boxed();
+
+    let api_routes = make_api(api_url, auth_kind, db, data, rev, lr.clone());
+    let api = warp::path("api").and(fallback_routes.or(api_swagger).or(api_routes));
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
@@ -159,7 +186,9 @@ async fn main() -> color_eyre::Result<()> {
             cors = cors.allow_origin(key.as_ref());
         }
     }
-    cors = cors.allow_methods(vec!["GET"]);
+    cors = cors
+        .allow_methods(vec!["OPTIONS", "GET"])
+        .allow_headers(vec!["authorization"]);
     let to_serve = routes.with(cors);
     let server = warp::serve(to_serve);
 
