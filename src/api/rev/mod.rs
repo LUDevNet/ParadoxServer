@@ -16,6 +16,7 @@ use warp::{
 mod common;
 mod data;
 
+mod activity;
 mod behaviors;
 mod component_types;
 mod loot_table_index;
@@ -37,8 +38,10 @@ pub struct Api<T, E> {
 
 fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
     Ok(warp::reply::json(&[
+        "activity",
         "behaviors",
         "component_types",
+        "loot_table_index",
         "mission_types",
         "object_types",
         "skill_ids",
@@ -65,12 +68,13 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_skills = skills::skill_api(&rev);
+    let rev_activity = activity::activity_api(&rev);
+    let rev_behaviors = behaviors::behaviors_api(&rev);
+    let rev_component_types = component_types::component_types_api(&rev);
+    let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
     let rev_mission_types = missions::mission_types_api(&rev);
     let rev_object_types = object_types::object_types_api(&rev);
-    let rev_component_types = component_types::component_types_api(&rev);
-    let rev_behaviors = behaviors::behaviors_api(&rev);
-    let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
+    let rev_skills = skills::skill_api(&rev);
 
     let first = rev
         .clone()
@@ -79,6 +83,8 @@ pub(super) fn make_api_rev(
         .map(map_res)
         .boxed();
     first
+        .or(rev_activity)
+        .unify()
         .or(rev_skills)
         .unify()
         .or(rev_mission_types)

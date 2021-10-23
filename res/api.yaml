@@ -5,22 +5,44 @@ info:
   version: "0.1"
 tags:
   - name: db
-    description: Queries on database tables
+    description: queries on database tables
   - name: locale
-    description: Queries the translations
+    description: queries the translations
+  - name: rev
+    description: (reverse) queries using DB index structures
 components:
   securitySchemes:
     basic_auth:
       type: http
       scheme: basic
   schemas:
+    NumArray:
+      type: array
+      items: { type: number }
+    StringArray:
+      type: array
+      items: { type: string }
+    ObjectArray:
+      type: array
+      items: { type: object }
+    ActivityRev:
+      type: object
+      properties:
+        rebuild: { $ref: "#/components/schemas/NumArray" }
     Behavior:
       type: object
-      properties: {}
-    Tables:
-      type: array
-      items:
-        type: string
+      properties:
+        skill: { $ref: "#/components/schemas/NumArray" }
+        uses: { $ref: "#/components/schemas/NumArray" }
+        used_by: { $ref: "#/components/schemas/NumArray" }
+        _embedded:
+          type: object
+          properties:
+            behaviorID: { type: number }
+            templateID: { type: number }
+            effectID: { type: number }
+            effectHandle: { type: number }
+            parameters: { type: object }
     TableDef:
       type: object
       properties:
@@ -38,31 +60,19 @@ components:
     LocaleNode:
       type: object
       properties:
-        value:
-          type: string
-        int_keys:
-          type: array
-          items:
-            type: number
-        str_keys:
-          type: array
-          items:
-            type: string
+        value: { type: string }
+        int_keys: { $ref: "#/components/schemas/NumArray" }
+        str_keys: { $ref: "#/components/schemas/StringArray" }
     LootTable:
       type: array
       items:
         type: object
         properties:
-          itemid:
-            type: number
-          LootTableIndex:
-            type: number
-          id:
-            type: number
-          MissionDrop:
-            type: boolean
-          sortPriority:
-            type: number
+          itemid: { type: number }
+          LootTableIndex: { type: number }
+          id: { type: number }
+          MissionDrop: { type: boolean }
+          sortPriority: { type: number }
     ErrorModel:
       type: number
 paths:
@@ -76,14 +86,12 @@ paths:
           description: The tables of the database
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Tables"
+              schema: { $ref: "#/components/schemas/StringArray" }
         default:
           description: Unexpected error
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
+              schema: { $ref: "#/components/schemas/ErrorModel" }
   "/v0/tables/{name}/def":
     get:
       tags:
@@ -94,14 +102,12 @@ paths:
           description: The request was successfull
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/TableDef"
+              schema: { $ref: "#/components/schemas/TableDef" }
     parameters:
       - in: path
         required: true
         name: name
-        schema:
-          type: string
+        schema: { type: string }
   "/v0/tables/{name}/{key}":
     get:
       tags:
@@ -112,43 +118,34 @@ paths:
           description: The request was successfull
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  type: object
+              schema: { $ref: "#/components/schemas/ObjectArray" }
     parameters:
       - in: path
         required: true
         name: name
-        schema:
-          type: string
+        schema: { type: string }
       - in: path
         required: true
         name: key
-        schema:
-          type: string
+        schema: { type: string }
   "/v0/locale/{path}":
     get:
-      tags:
-        - locale
+      tags: [locale]
       description: Get a single locale node
       responses:
         "200":
           description: The request was successfull
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/LocaleNode"
+              schema: { $ref: "#/components/schemas/LocaleNode" }
     parameters:
       - in: path
         required: true
         name: path
-        schema:
-          type: string
+        schema: { type: string }
   "/v0/locale/{path}/$all":
     get:
-      tags:
-        - locale
+      tags: [locale]
       description: Get a locale subtree
       responses:
         "200":
@@ -162,22 +159,50 @@ paths:
       - in: path
         required: true
         name: path
-        schema:
-          type: string
+        schema: { type: string }
   "/v0/rev":
     get:
+      tags: [rev]
       description: List all supported reverse lookup scopes
       responses:
         "200":
           description: The request was successfull
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  type: string
+              schema: { $ref: "#/components/schemas/StringArray" }
+  "/v0/rev/activity/{id}":
+    get:
+      tags: [rev]
+      description: Get data associated with an `ActivityID`
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActivityRev" }
+    parameters:
+      - in: path
+        required: true
+        name: id
+        schema: { type: number }
+  "/v0/rev/behaviors/{id}":
+    get:
+      tags: [rev]
+      description: Get all data for a specific behavior ID
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Behavior" }
+    parameters:
+      - in: path
+        required: true
+        name: id
+        schema: { type: number }
   "/v0/rev/component_types":
     get:
+      tags: [rev]
       description: List all component types in the database
       responses:
         "200":
@@ -187,7 +212,9 @@ paths:
               schema: { type: array, items: { type: string } }
   "/v0/rev/component_types/{type}":
     get:
-      description: List all component IDs and associated objects for a component type
+      tags: [rev]
+      description:
+        List all component IDs and associated objects for a component type
         This is a reverse lookup of the `ComponentsRegistry` table
       responses:
         "200":
@@ -199,11 +226,12 @@ paths:
       - in: path
         required: true
         name: type
-        schema:
-          type: number
+        schema: { type: number }
   "/v0/rev/component_types/{type}/{id}":
     get:
-      description: List all component IDs and associated objects for a component type
+      tags: [rev]
+      description:
+        List all component IDs and associated objects for a component type
         This is a reverse lookup of the `ComponentsRegistry` table
       responses:
         "200":
@@ -215,31 +243,14 @@ paths:
       - in: path
         required: true
         name: type
-        schema:
-          type: number
+        schema: { type: number }
       - in: path
         required: true
         name: id
-        schema:
-          type: number
-  "/v0/rev/behaviors/{id}":
-    get:
-      description: Get all data for a specific behavior ID
-      responses:
-        "200":
-          description: The request was successfull
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Behavior"
-    parameters:
-      - in: path
-        required: true
-        name: id
-        schema:
-          type: number
+        schema: { type: number }
   "/v0/rev/loot_table_index/{id}":
     get:
+      tags: [rev]
       description: Get data from the `LootTable` by `Index`
       responses:
         "200":
@@ -249,11 +260,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  loot_table:
-                    $ref: "#/components/schemas/LootTable"
+                  loot_table: { $ref: "#/components/schemas/LootTable" }
     parameters:
       - in: path
         required: true
         name: id
-        schema:
-          type: number
+        schema: { type: number }
