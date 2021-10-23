@@ -10,10 +10,13 @@ use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
 use warp::{
+    filters::BoxedFilter,
     path::Tail,
     reply::{Json, WithStatus},
     Filter, Reply,
 };
+
+use crate::auth::AuthKind;
 
 use self::{
     adapter::{LocaleAll, LocalePod},
@@ -22,6 +25,7 @@ use self::{
 };
 
 pub mod adapter;
+mod docs;
 pub mod rev;
 pub mod tables;
 
@@ -145,12 +149,14 @@ pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::J
     }
 }
 
-pub(crate) fn make_api<'a>(
-    db: Database<'a>,
+pub(crate) fn make_api(
+    url: String,
+    auth_kind: AuthKind,
+    db: Database<'static>,
     tydb: &'static TypedDatabase<'static>,
     rev: &'static ReverseLookup,
     lr: Arc<LocaleNode>,
-) -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone + 'a {
+) -> BoxedFilter<(WithStatus<Json>,)> {
     let v0_base = warp::path("v0");
     let v0_tables = warp::path("tables").and(make_api_tables(db));
     let v0_locale = warp::path("locale")
@@ -159,7 +165,16 @@ pub(crate) fn make_api<'a>(
         .map(map_opt);
 
     let v0_rev = warp::path("rev").and(make_api_rev(tydb, rev));
-    let v0 = v0_base.and(v0_tables.or(v0_locale).unify().or(v0_rev).unify());
+    let v0_openapi = docs::openapi(url, auth_kind).unwrap();
+    let v0 = v0_base.and(
+        v0_tables
+            .or(v0_locale)
+            .unify()
+            .or(v0_rev)
+            .unify()
+            .or(v0_openapi)
+            .unify(),
+    );
 
     // v1
     let dbf = db_filter(db);
@@ -174,5 +189,5 @@ pub(crate) fn make_api<'a>(
     // catch all
     let catch_all = make_api_catch_all();
 
-    v0.or(v1).unify().or(catch_all).unify()
+    v0.or(v1).unify().or(catch_all).unify().boxed()
 }

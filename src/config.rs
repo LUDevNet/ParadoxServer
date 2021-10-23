@@ -18,6 +18,7 @@ fn default_lu_json_cache() -> PathBuf {
 #[derive(Deserialize)]
 pub struct CorsOptions {
     pub all: bool,
+    #[serde(default)]
     pub domains: Vec<String>,
 }
 

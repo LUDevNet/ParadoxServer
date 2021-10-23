@@ -1,0 +1,225 @@
+---
+openapi: 3.0.3
+info:
+  title: LU-Explorer API
+  version: "0.1"
+tags:
+  - name: db
+    description: Queries on database tables
+  - name: locale
+    description: Queries the translations
+components:
+  securitySchemes:
+    basic_auth:
+      type: http
+      scheme: basic
+  schemas:
+    Behavior:
+      type: object
+      properties: {}
+    Tables:
+      type: array
+      items:
+        type: string
+    TableDef:
+      type: object
+      properties:
+        name:
+          type: string
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              data_type:
+                type: string
+    LocaleNode:
+      type: object
+      properties:
+        value:
+          type: string
+        int_keys:
+          type: array
+          items:
+            type: number
+        str_keys:
+          type: array
+          items:
+            type: string
+    ErrorModel:
+      type: number
+paths:
+  "/v0/tables":
+    get:
+      tags:
+        - db
+      description: List all database table names
+      responses:
+        "200":
+          description: The tables of the database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tables"
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+  "/v0/tables/{name}/def":
+    get:
+      tags:
+        - db
+      description: Show the definiton of a database table
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TableDef"
+    parameters:
+      - in: path
+        required: true
+        name: name
+        schema:
+          type: string
+  "/v0/tables/{name}/{key}":
+    get:
+      tags:
+        - db
+      description: Show data for a key in a table
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+    parameters:
+      - in: path
+        required: true
+        name: name
+        schema:
+          type: string
+      - in: path
+        required: true
+        name: key
+        schema:
+          type: string
+  "/v0/locale/{path}":
+    get:
+      tags:
+        - locale
+      description: Get a single locale node
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocaleNode"
+    parameters:
+      - in: path
+        required: true
+        name: path
+        schema:
+          type: string
+  "/v0/locale/{path}/$all":
+    get:
+      tags:
+        - locale
+      description: Get a locale subtree
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+    parameters:
+      - in: path
+        required: true
+        name: path
+        schema:
+          type: string
+  "/v0/rev":
+    get:
+      description: List all supported reverse lookup scopes
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+  "/v0/rev/component_types":
+    get:
+      description: List all component types in the database
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+  "/v0/rev/component_types/{type}":
+    get:
+      description: List all component IDs and associated objects for a component type
+        This is a reverse lookup of the `ComponentsRegistry` table
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+    parameters:
+      - in: path
+        required: true
+        name: type
+        schema:
+          type: number
+  "/v0/rev/component_types/{type}/{id}":
+    get:
+      description: List all component IDs and associated objects for a component type
+        This is a reverse lookup of the `ComponentsRegistry` table
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+    parameters:
+      - in: path
+        required: true
+        name: type
+        schema:
+          type: number
+      - in: path
+        required: true
+        name: id
+        schema:
+          type: number
+  "/v0/rev/behaviors/{id}":
+    get:
+      description: Get all data for a specific behavior ID
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Behavior"
+    parameters:
+      - in: path
+        required: true
+        name: id
+        schema:
+          type: number

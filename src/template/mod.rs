@@ -16,7 +16,7 @@ use regex::{Captures, Regex};
 use serde::Serialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
-use warp::{path::FullPath, Filter};
+use warp::{filters::BoxedFilter, path::FullPath, Filter};
 
 fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
@@ -352,12 +352,12 @@ fn meta<'r>(
 }
 
 #[allow(clippy::needless_lifetimes)] // false positive?
-pub(crate) fn make_spa_dynamic<'r>(
+pub(crate) fn make_spa_dynamic(
     data: &'static TypedDatabase<'static>,
-    hb: Arc<RwLock<Handlebars<'r>>>,
+    hb: Arc<RwLock<Handlebars<'static>>>,
     domain: &str,
     //    hnd: ArcHandle<B, FDBHeader>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = Infallible> + Clone + 'r {
+) -> BoxedFilter<(impl warp::Reply,)> {
     let dom = {
         let d = Box::leak(domain.to_string().into_boxed_str()) as &str;
         warp::any().map(move || d)
@@ -393,4 +393,5 @@ pub(crate) fn make_spa_dynamic<'r>(
             },
         )
         .map(handlebars)
+        .boxed()
 }
