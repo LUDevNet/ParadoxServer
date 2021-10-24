@@ -46,17 +46,14 @@ components:
     TableDef:
       type: object
       properties:
-        name:
-          type: string
+        name: { type: string }
         columns:
           type: array
           items:
             type: object
             properties:
-              name:
-                type: string
-              data_type:
-                type: string
+              name: { type: string }
+              data_type: { type: string }
     LocaleNode:
       type: object
       properties:
@@ -73,6 +70,33 @@ components:
           id: { type: number }
           MissionDrop: { type: boolean }
           sortPriority: { type: number }
+    MissionTasks:
+      type: object
+      additionalProprties:
+        type: object
+        properties:
+          id: { type: integer }
+          locStatus: { type: integer }
+          taskType: { type: integer }
+          target: { type: integer }
+          targetGroup: { type: string }
+          targetValue: { type: integer }
+          taskParam1: { type: string }
+          largeTaskIcon: { type: string }
+          IconID: { type: integer }
+          uid: { type: integer }
+          largeTaskIconID: { type: integer }
+          localize: { type: boolean }
+          gate_version: { type: string }
+    SkillRev:
+      type: object
+      properties:
+        mission_tasks: { $ref: "#/components/schemas/NumArray" }
+        objects: { $ref: "#/components/schemas/NumArray" }
+        item_sets: { $ref: "#/components/schemas/NumArray" }
+        _embedded:
+          type: object
+          MissionTasks: { $ref: "#/components/schemas/MissionTasks" }
     ErrorModel:
       type: number
 paths:
@@ -180,6 +204,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ActivityRev" }
+    parameters:
+      - in: path
+        required: true
+        name: id
+        schema: { type: number }
+  "/v0/rev/skill_ids/{id}":
+    get:
+      tags: [rev]
+      description: Get data associated with an `SkillID`
+      responses:
+        "200":
+          description: The request was successfull
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillRev" }
     parameters:
       - in: path
         required: true
