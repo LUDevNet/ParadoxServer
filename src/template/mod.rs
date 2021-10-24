@@ -1,3 +1,4 @@
+use color_eyre::eyre::Context;
 use notify::event::{AccessKind, AccessMode, EventKind, RemoveKind};
 use pin_project::pin_project;
 use std::{
@@ -111,7 +112,8 @@ pub fn load_meta_template(
     path: &Path,
 ) -> Result<(), color_eyre::Report> {
     info!("(re-)loading template.html");
-    let index_text = std::fs::read_to_string(&path)?;
+    let index_text = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to load '{}'", path.display()))?;
     let tpl_str = make_meta_template(&index_text);
     let mut hb = reg
         .write()
