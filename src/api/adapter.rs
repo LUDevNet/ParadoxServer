@@ -2,8 +2,8 @@ use std::iter::Copied;
 use std::slice::Iter;
 use std::{collections::BTreeMap, fmt};
 
-use assembly_data::xml::localization::LocaleNode;
-use paradox_typed_db::typed_rows::TypedRow;
+use assembly_xml::localization::LocaleNode;
+use paradox_typed_db::TypedRow;
 use serde::{ser::SerializeMap, Serialize};
 
 pub(crate) trait FindHash {
@@ -90,24 +90,53 @@ where
     }
 }
 
+pub(crate) struct TableMultiIter<'a, 'b, R, K, F>
+where
+    K: Iterator<Item = i32>,
+    F: FindHash,
+    R: TypedRow<'a, 'b>,
+{
+    pub(crate) index: F,
+    pub(crate) key_iter: K,
+    pub(crate) table: &'b R::Table,
+    pub(crate) id_col: usize,
+}
+
+impl<'a, 'b, R, K, F> Iterator for TableMultiIter<'a, 'b, R, K, F>
+where
+    K: Iterator<Item = i32>,
+    F: FindHash,
+    R: TypedRow<'a, 'b>,
+{
+    type Item = (i32, R);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for key in &mut self.key_iter {
+            if let Some(hash) = self.index.find_hash(key) {
+                if let Some(r) = R::get(self.table, hash, key, self.id_col) {
+                    return Some((key, r));
+                }
+            }
+        }
+        None
+    }
+}
+
 impl<'b, 'a: 'b, R, F, K> TypedTableIterAdapter<'a, 'b, R, F, K>
 where
     R: TypedRow<'a, 'b> + 'b,
 {
-    pub(crate) fn to_iter(&self, id_col: usize) -> impl Iterator<Item = (i32, R)> + 'b
+    pub(crate) fn to_iter(&self, id_col: usize) -> TableMultiIter<'a, 'b, R, K::IntoIter, F>
     where
         F: FindHash + Copy + 'b,
         K: IntoIterator<Item = i32> + Clone + 'b,
     {
-        let table: &'b R::Table = self.table;
-        let i = self.index;
-        let iter = self.keys.clone().into_iter();
-        let mapper = move |key| {
-            let hash = i.find_hash(key)?;
-            let r = R::get(table, hash, key, id_col)?;
-            Some((key, r))
-        };
-        iter.filter_map(mapper)
+        TableMultiIter {
+            index: self.index,
+            key_iter: self.keys.clone().into_iter(),
+            table: self.table,
+            id_col,
+        }
     }
 }
 

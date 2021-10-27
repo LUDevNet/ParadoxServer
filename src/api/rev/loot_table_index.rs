@@ -4,7 +4,7 @@ use crate::api::{
     adapter::{AdapterLayout, TypedTableIterAdapter},
     map_opt,
 };
-use paradox_typed_db::{typed_rows::LootTableRow, TypedDatabase};
+use paradox_typed_db::{columns::LootTableColumn, rows::LootTableRow, TypedDatabase};
 use serde::Serialize;
 use warp::{
     filters::BoxedFilter,
@@ -30,7 +30,7 @@ fn rev_loop_table_index_api(db: &TypedDatabase, rev: Rev<'static>, index: i32) -
                 index,
                 keys,
                 table: &db.loot_table,
-                id_col: db.loot_table.col_id,
+                id_col: db.loot_table.get_col(LootTableColumn::Id).unwrap(),
                 layout: AdapterLayout::Seq,
             };
             list

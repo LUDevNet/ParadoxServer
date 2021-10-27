@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use assembly_core::buffer::CastError;
-use assembly_data::fdb::{
+use assembly_fdb::{
     common::ValueType,
     mem::{Column, Database, Row},
     query,

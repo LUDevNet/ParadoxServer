@@ -1,8 +1,9 @@
 use assembly_core::buffer::CastError;
 use paradox_typed_db::{
-    typed_rows::{BehaviorTemplateRow, TypedRow},
-    typed_tables::{BehaviorParameterTable, BehaviorTemplateTable},
-    TypedDatabase,
+    columns::BehaviorTemplateColumn,
+    rows::BehaviorTemplateRow,
+    tables::{BehaviorParameterTable, BehaviorTemplateTable},
+    TypedDatabase, TypedRow,
 };
 use serde::ser::SerializeMap;
 use serde::Serialize;
@@ -56,6 +57,10 @@ impl Serialize for EmbeddedBehaviors<'_, '_> {
         S: serde::Serializer,
     {
         let mut m = serializer.serialize_map(Some(self.keys.len()))?;
+        let col_behavior_id = self
+            .table_templates
+            .get_col(BehaviorTemplateColumn::BehaviorId)
+            .unwrap();
         for &behavior_id in self.keys {
             m.serialize_key(&behavior_id)?;
             let b = Behavior {
@@ -63,7 +68,7 @@ impl Serialize for EmbeddedBehaviors<'_, '_> {
                     self.table_templates,
                     behavior_id,
                     behavior_id,
-                    self.table_templates.col_behavior_id,
+                    col_behavior_id,
                 ),
                 parameters: BehaviorParameters {
                     key: behavior_id,

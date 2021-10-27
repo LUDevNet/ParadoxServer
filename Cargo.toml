@@ -5,6 +5,11 @@ authors = ["Xiphoseer <xiphoseer@mailbox.org>"]
 edition = "2018"
 
 [dependencies]
+assembly-core = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
+assembly-maps = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
+assembly-pack = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
+assembly-fdb = { git = "https://github.com/Xiphoseer/assembly_rs.git", default-features = false, features = ["serde-derives"] }
+assembly-xml = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
 base64 = "0.13"
 handlebars = "3.5"
 pretty_env_logger = "0.4.0"
@@ -26,14 +31,6 @@ tracing = "0.1"
 version = "0.3"
 features = ["tls", "multipart"]
 default-features = false
-
-[dependencies.assembly-core]
-version = "0.2.1"
-
-[dependencies.assembly-data]
-version = "0.3.0"
-default-features = false
-features = ["serde-derives"]
 
 # Holds data in insertion order
 [dependencies.linked-hash-map]

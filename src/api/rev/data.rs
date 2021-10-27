@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use assembly_data::fdb::common::Latin1Str;
+use assembly_fdb::common::Latin1Str;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 
@@ -92,11 +92,7 @@ impl ReverseLookup {
 
         for m in db.missions.row_iter() {
             let id = m.id();
-            let d_type = m
-                .defined_type()
-                .map(Latin1Str::decode)
-                .unwrap_or_default()
-                .into_owned();
+            let d_type = m.defined_type().decode().into_owned();
             let d_subtype = m
                 .defined_subtype()
                 .map(Latin1Str::decode)

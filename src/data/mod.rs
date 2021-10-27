@@ -1,8 +1,11 @@
 use std::{convert::TryFrom, fmt};
 
-use assembly_data::fdb::common::Latin1Str;
+use assembly_fdb::common::Latin1Str;
 use serde::{Deserialize, Serialize};
 
+pub mod fs;
+pub mod locale;
+pub mod maps;
 pub mod skill_system;
 
 #[repr(u8)]
