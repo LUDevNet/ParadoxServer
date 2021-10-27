@@ -26,6 +26,8 @@ mod skills;
 
 pub use data::ReverseLookup;
 
+use crate::data::locale::LocaleRoot;
+
 use super::{map_res, tydb_filter};
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +65,7 @@ type Ext = (&'static TypedDatabase<'static>, Rev<'static>);
 
 pub(super) fn make_api_rev(
     db: &'static TypedDatabase<'static>,
+    loc: LocaleRoot,
     rev: &'static ReverseLookup,
 ) -> BoxedFilter<(WithStatus<Json>,)> {
     let db = tydb_filter(db);
@@ -72,7 +75,7 @@ pub(super) fn make_api_rev(
     let rev_behaviors = behaviors::behaviors_api(&rev);
     let rev_component_types = component_types::component_types_api(&rev);
     let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
-    let rev_mission_types = missions::mission_types_api(&rev);
+    let rev_mission_types = missions::mission_types_api(&rev, loc);
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
 

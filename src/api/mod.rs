@@ -2,11 +2,13 @@ use std::{
     borrow::Borrow,
     convert::Infallible,
     error::Error,
+    path::Path,
     str::{FromStr, Utf8Error},
     sync::Arc,
 };
 
-use assembly_data::{fdb::mem::Database, xml::localization::LocaleNode};
+use assembly_fdb::mem::Database;
+use assembly_xml::localization::LocaleNode;
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
 use warp::{
@@ -16,16 +18,18 @@ use warp::{
     Filter, Reply,
 };
 
-use crate::auth::AuthKind;
+use crate::{auth::AuthKind, data::locale::LocaleRoot};
 
 use self::{
     adapter::{LocaleAll, LocalePod},
+    files::make_crc_lookup_filter,
     rev::{make_api_rev, ReverseLookup},
     tables::{make_api_tables, tables_api},
 };
 
 pub mod adapter;
 mod docs;
+mod files;
 pub mod rev;
 pub mod tables;
 
@@ -149,45 +153,57 @@ pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::J
     }
 }
 
-pub(crate) fn make_api(
-    url: String,
-    auth_kind: AuthKind,
-    db: Database<'static>,
-    tydb: &'static TypedDatabase<'static>,
-    rev: &'static ReverseLookup,
-    lr: Arc<LocaleNode>,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let v0_base = warp::path("v0");
-    let v0_tables = warp::path("tables").and(make_api_tables(db));
-    let v0_locale = warp::path("locale")
-        .and(warp::path::tail())
-        .map(locale_api(lr))
-        .map(map_opt);
+pub(crate) struct ApiFactory<'a> {
+    pub url: String,
+    pub auth_kind: AuthKind,
+    pub db: Database<'static>,
+    pub tydb: &'static TypedDatabase<'static>,
+    pub rev: &'static ReverseLookup,
+    pub lr: Arc<LocaleNode>,
+    pub res_path: &'a Path,
+    pub pki_path: Option<&'a Path>,
+}
 
-    let v0_rev = warp::path("rev").and(make_api_rev(tydb, rev));
-    let v0_openapi = docs::openapi(url, auth_kind).unwrap();
-    let v0 = v0_base.and(
-        v0_tables
-            .or(v0_locale)
-            .unify()
-            .or(v0_rev)
-            .unify()
-            .or(v0_openapi)
-            .unify(),
-    );
+impl<'a> ApiFactory<'a> {
+    pub(crate) fn make_api(self) -> BoxedFilter<(WithStatus<Json>,)> {
+        let loc = LocaleRoot::new(self.lr.clone());
 
-    // v1
-    let dbf = db_filter(db);
-    let v1_base = warp::path("v1");
-    let v1_tables_base = dbf.and(warp::path("tables"));
-    let v1_tables = v1_tables_base
-        .and(warp::path::end())
-        .map(tables_api)
-        .map(map_res);
-    let v1 = v1_base.and(v1_tables);
+        let v0_base = warp::path("v0");
+        let v0_tables = warp::path("tables").and(make_api_tables(self.db));
+        let v0_locale = warp::path("locale")
+            .and(warp::path::tail())
+            .map(locale_api(self.lr))
+            .map(map_opt);
 
-    // catch all
-    let catch_all = make_api_catch_all();
+        let v0_crc = warp::path("crc").and(make_crc_lookup_filter(self.res_path, self.pki_path));
 
-    v0.or(v1).unify().or(catch_all).unify().boxed()
+        let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
+        let v0_openapi = docs::openapi(self.url, self.auth_kind).unwrap();
+        let v0 = v0_base.and(
+            v0_tables
+                .or(v0_crc)
+                .unify()
+                .or(v0_locale)
+                .unify()
+                .or(v0_rev)
+                .unify()
+                .or(v0_openapi)
+                .unify(),
+        );
+
+        // v1
+        let dbf = db_filter(self.db);
+        let v1_base = warp::path("v1");
+        let v1_tables_base = dbf.and(warp::path("tables"));
+        let v1_tables = v1_tables_base
+            .and(warp::path::end())
+            .map(tables_api)
+            .map(map_res);
+        let v1 = v1_base.and(v1_tables);
+
+        // catch all
+        let catch_all = make_api_catch_all();
+
+        v0.or(v1).unify().or(catch_all).unify().boxed()
+    }
 }

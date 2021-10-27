@@ -12,12 +12,17 @@ use std::{
 };
 
 use handlebars::Handlebars;
-use paradox_typed_db::{typed_ext::MissionKind, TypedDatabase};
+use paradox_typed_db::{ext::MissionKind, TypedDatabase};
 use regex::{Captures, Regex};
 use serde::Serialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
 use warp::{filters::BoxedFilter, path::FullPath, Filter};
+
+use crate::data::{
+    fs::{cleanup_path, LuRes},
+    locale::LocaleRoot,
+};
 
 fn make_meta_template(text: &str) -> Cow<str> {
     let re = Regex::new("<meta\\s+(name|property)=\"(.*?)\"\\s+content=\"(.*)\"\\s*/?>").unwrap();
@@ -146,7 +151,7 @@ where
 }
 
 /// Retrieve metadata for /missions/:id
-fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
+fn mission_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
     let mut image = None;
     let mut kind = MissionKind::Mission;
     if let Some(mission) = data.get_mission_data(id) {
@@ -154,7 +159,7 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
             kind = MissionKind::Achievement;
             if let Some(icon_id) = mission.mission_icon_id {
                 if let Some(path) = data.get_icon_path(icon_id) {
-                    image = Some(data.to_res_href(&path));
+                    image = cleanup_path(path).map(|p| res.to_res_href(&p));
                 }
             }
         }
@@ -163,12 +168,12 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
     let mut desc = String::new();
 
     let tasks = data.get_mission_tasks(id);
-    let tasks_locale = data.locale.str_children.get("MissionTasks").unwrap();
+    let tasks_locale = loc.root.str_children.get("MissionTasks").unwrap();
     for task in tasks {
         if image == None {
             if let Some(icon_id) = task.icon_id {
                 if let Some(path) = data.get_icon_path(icon_id) {
-                    image = Some(data.to_res_href(&path));
+                    image = cleanup_path(path).map(|p| res.to_res_href(&p));
                 }
             }
         }
@@ -188,7 +193,7 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
         desc.pop();
     }
 
-    let title = data
+    let title = loc
         .get_mission_name(kind, id)
         .unwrap_or(format!("Missing {:?} #{}", kind, id));
 
@@ -200,12 +205,13 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /objects/:id
-fn object_get_api(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
+fn object_get_api(data: &'_ TypedDatabase<'_>, _loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
     let (title, description) = data
         .get_object_name_desc(id)
         .unwrap_or((format!("Missing Object #{}", id), String::new()));
     let comp = data.get_components(id);
     let image = comp.render.and_then(|id| data.get_render_image(id));
+    let image = image.and_then(cleanup_path).map(|p| res.to_res_href(&p));
     Meta {
         title: Cow::Owned(title),
         description: Cow::Owned(description),
@@ -214,15 +220,15 @@ fn object_get_api(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /objects/item-sets/:id
-fn item_set_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
+fn item_set_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
     let mut rank = 0;
     let mut image = None;
     let mut desc = String::new();
     if let Some(item_set) = data.item_sets.get_data(id) {
         rank = item_set.kit_rank;
         if let Some(image_id) = item_set.kit_image {
-            if let Some(path) = data.get_icon_path(image_id) {
-                image = Some(data.to_res_href(&path));
+            if let Some(path) = data.get_icon_path(image_id).and_then(cleanup_path) {
+                image = Some(res.to_res_href(&path));
             }
         }
 
@@ -237,7 +243,7 @@ fn item_set_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
         desc.pop();
     }
 
-    let title = data
+    let title = loc
         .get_item_set_name(rank, id)
         .unwrap_or(format!("Unnamed Item Set #{}", id));
 
@@ -249,8 +255,8 @@ fn item_set_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
 }
 
 /// Retrieve metadata for /skills/:id
-fn skill_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
-    let (mut title, description) = data.get_skill_name_desc(id);
+fn skill_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
+    let (mut title, description) = loc.get_skill_name_desc(id);
     let description = description.map(Cow::Owned).unwrap_or(Cow::Borrowed(""));
     let mut image = None;
 
@@ -259,8 +265,8 @@ fn skill_get_impl(data: &'_ TypedDatabase<'_>, id: i32) -> Meta {
             title = Some(format!("Skill #{}", id))
         }
         if let Some(icon_id) = skill.skill_icon {
-            if let Some(path) = data.get_icon_path(icon_id) {
-                image = Some(data.to_res_href(&path));
+            if let Some(path) = data.get_icon_path(icon_id).and_then(cleanup_path) {
+                image = Some(res.to_res_href(&path));
             }
         }
     }
@@ -296,8 +302,13 @@ struct Meta {
 
 fn meta<'r>(
     data: &'static TypedDatabase<'static>,
+    loc: LocaleRoot,
+    res: LuRes,
 ) -> impl Filter<Extract = (Meta,), Error = Infallible> + Clone + 'r {
-    let base = warp::any().map(move || data);
+    let d = warp::any().map(move || data);
+    let l = warp::any().map(move || loc.clone());
+    let r = warp::any().map(move || res.clone());
+    let base = d.and(l).and(r);
 
     let dashboard = warp::path("dashboard").and(warp::path::end()).map(|| Meta {
         title: Cow::Borrowed("Dashboard"),
@@ -310,13 +321,19 @@ fn meta<'r>(
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
     });
-    let object_get = base.and(warp::path::param::<i32>()).map(object_get_api);
+    let object_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(object_get_api);
     let item_sets_end = warp::path::end().map(|| Meta {
         title: Cow::Borrowed("Item Sets"),
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
     });
-    let item_set_get = base.and(warp::path::param::<i32>()).map(item_set_get_impl);
+    let item_set_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(item_set_get_impl);
     let item_sets = warp::path("item-sets").and(item_sets_end.or(item_set_get).unify());
     let objects =
         warp::path("objects").and(objects_end.or(object_get).unify().or(item_sets).unify());
@@ -326,7 +343,10 @@ fn meta<'r>(
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
         image: None,
     });
-    let mission_get = base.and(warp::path::param::<i32>()).map(mission_get_impl);
+    let mission_get = base
+        .clone()
+        .and(warp::path::param::<i32>())
+        .map(mission_get_impl);
     let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
 
     let skills_end = warp::path::end().map(move || Meta {
@@ -356,6 +376,8 @@ fn meta<'r>(
 #[allow(clippy::needless_lifetimes)] // false positive?
 pub(crate) fn make_spa_dynamic(
     data: &'static TypedDatabase<'static>,
+    loc: LocaleRoot,
+    res: LuRes,
     hb: Arc<RwLock<Handlebars<'static>>>,
     domain: &str,
     //    hnd: ArcHandle<B, FDBHeader>,
@@ -366,8 +388,7 @@ pub(crate) fn make_spa_dynamic(
     };
 
     // Prepare the default image
-    let mut default_img = data.lu_res_prefix.to_owned();
-    default_img.push_str(DEFAULT_IMG);
+    let default_img = res.to_res_href(Path::new(DEFAULT_IMG));
     let default_img: &'static str = Box::leak(default_img.into_boxed_str());
 
     // Create a reusable closure to render template
@@ -375,7 +396,7 @@ pub(crate) fn make_spa_dynamic(
 
     warp::any()
         .and(dom)
-        .and(meta(data))
+        .and(meta(data, loc, res))
         .and(warp::path::full())
         .map(
             move |dom: &str, meta: Meta, full_path: FullPath| WithTemplate {

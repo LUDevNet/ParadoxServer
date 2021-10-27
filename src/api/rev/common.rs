@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
+use assembly_fdb::common::Latin1Str;
 use paradox_typed_db::{
-    typed_rows::{MissionTaskRow, ObjectsRef},
-    typed_tables::MissionTasksTable,
+    columns::ObjectsColumn,
+    rows::{MissionTasksRow, ObjectsRow},
+    tables::{MissionTasksTable, ObjectsTable},
 };
 use serde::Serialize;
 
-use crate::api::adapter::{FindHash, I32Slice, IdentityHash, TypedTableIterAdapter};
+use crate::api::adapter::{
+    FindHash, I32Slice, IdentityHash, TableMultiIter, TypedTableIterAdapter,
+};
 
 use super::data::MissionTaskUIDLookup;
 
@@ -16,8 +20,40 @@ pub struct MapFilter<'a, E> {
     keys: &'a [i32],
 }
 
-pub(super) type ObjectsRefAdapter<'a, 'b> =
-    TypedTableIterAdapter<'a, 'b, ObjectsRef<'a, 'b>, IdentityHash, I32Slice<'b>>;
+#[derive(Clone)]
+pub struct ObjectsRefAdapter<'a, 'b> {
+    table: &'b ObjectsTable<'a>,
+    keys: &'b [i32],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+struct ObjectRefData<'a> {
+    name: &'a Latin1Str,
+}
+
+impl<'a, 'b> ObjectsRefAdapter<'a, 'b> {
+    pub fn new(table: &'b ObjectsTable<'a>, keys: &'b [i32]) -> Self {
+        Self { table, keys }
+    }
+}
+
+impl<'a, 'b> serde::Serialize for ObjectsRefAdapter<'a, 'b> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let id_col = self.table.get_col(ObjectsColumn::Id).unwrap();
+        serializer.collect_map(
+            TableMultiIter {
+                index: IdentityHash,
+                key_iter: self.keys.iter().copied(),
+                table: self.table,
+                id_col,
+            }
+            .map(|(id, row): (i32, ObjectsRow)| (id, ObjectRefData { name: row.name() })),
+        )
+    }
+}
 
 #[derive(Serialize)]
 pub(super) struct ObjectTypeEmbedded<'a, 'b> {
@@ -44,7 +80,7 @@ impl<'a, E: Serialize> Serialize for MapFilter<'a, E> {
 pub(super) type MissionTaskHash<'b> = &'b HashMap<i32, MissionTaskUIDLookup>;
 
 pub(super) type MissionTasks<'a, 'b> =
-    TypedTableIterAdapter<'a, 'b, MissionTaskRow<'a, 'b>, MissionTaskHash<'b>, I32Slice<'b>>;
+    TypedTableIterAdapter<'a, 'b, MissionTasksRow<'a, 'b>, MissionTaskHash<'b>, I32Slice<'b>>;
 
 pub(super) struct MissionTaskIconsAdapter<'a, 'b> {
     table: &'b MissionTasksTable<'a>,
