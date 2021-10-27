@@ -66,6 +66,10 @@ pub struct TlsOptions {
 
 #[derive(Deserialize)]
 pub struct DataOptions {
+    /// The `client/res` directory
+    pub res: Option<PathBuf>,
+    /// The `versions` directory
+    pub versions: Option<PathBuf>,
     /// The CDClient database FDB file
     pub cdclient: PathBuf,
     /// The lu-explorer static files

@@ -1,11 +1,13 @@
 use std::{
     fs::File,
+    path::Path,
     str::FromStr,
     sync::{Arc, RwLock},
 };
 
-use api::make_api;
-use assembly_data::{fdb::mem::Database, xml::localization::load_locale};
+use api::ApiFactory;
+use assembly_fdb::mem::Database;
+use assembly_xml::localization::load_locale;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
 use handlebars::Handlebars;
@@ -15,6 +17,7 @@ use paradox_typed_db::TypedDatabase;
 use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tokio::runtime::Handle;
+use tracing::log::LevelFilter;
 use warp::{filters::BoxedFilter, hyper::Uri, path::FullPath, Filter, Reply};
 
 mod api;
@@ -29,6 +32,7 @@ use crate::{
     api::rev::ReverseLookup,
     auth::AuthKind,
     config::AuthConfig,
+    data::{fs::LuRes, locale::LocaleRoot},
     fallback::make_fallback,
     redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
@@ -36,7 +40,9 @@ use crate::{
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    pretty_env_logger::init();
+    pretty_env_logger::formatted_builder()
+        .filter_level(LevelFilter::Info)
+        .init();
 
     color_eyre::install()?;
     let opts = Options::from_args();
@@ -86,14 +92,33 @@ async fn main() -> color_eyre::Result<()> {
         .clone()
         .unwrap_or_else(|| format!("{}/lu-res", canonical_base_url));
 
-    let lu_res_prefix = Box::leak(lu_res.clone().into_boxed_str());
-    let tydb = TypedDatabase::new(lr.clone(), lu_res_prefix, tables)?;
-    let data = Box::leak(Box::new(tydb));
-    let rev = Box::leak(Box::new(ReverseLookup::new(data)));
+    let res = LuRes::new(&lu_res);
+
+    let tydb = TypedDatabase::new(tables)?;
+    let tydb = Box::leak(Box::new(tydb));
+    let rev = Box::leak(Box::new(ReverseLookup::new(tydb)));
+
+    // Load the files
+    // let mut f = Folder::default();
+    // if let Some(res) = &cfg.data.res {
+    //     let mut loader = Loader::new();
+    //     f = loader.load_dir(res);
+    // }
 
     // Make the API
     let lu_json_path = cfg.data.lu_json_cache.clone();
     let fallback_routes = make_fallback(lu_json_path);
+
+    let res_path = cfg
+        .data
+        .res
+        .as_deref()
+        .unwrap_or_else(|| Path::new("client/res"));
+    let pki_path = cfg.data.versions.as_ref().map(|x| x.join("primary.pki"));
+
+    let file_routes = warp::path("v1")
+        .and(warp::path("res"))
+        .and(data::fs::make_file_filter(res_path));
 
     let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_) })) {
         AuthKind::Basic
@@ -115,8 +140,23 @@ async fn main() -> color_eyre::Result<()> {
         })
         .boxed();
 
-    let api_routes = make_api(api_url, auth_kind, db, data, rev, lr.clone());
-    let api = warp::path("api").and(fallback_routes.or(api_swagger).or(api_routes));
+    let api_routes = ApiFactory {
+        url: api_url,
+        auth_kind,
+        db,
+        tydb,
+        rev,
+        lr: lr.clone(),
+        res_path,
+        pki_path: pki_path.as_deref(),
+    }
+    .make_api();
+    let api = warp::path("api").and(
+        fallback_routes
+            .or(api_swagger)
+            .or(file_routes)
+            .or(api_routes),
+    );
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
@@ -136,7 +176,8 @@ async fn main() -> color_eyre::Result<()> {
 
     rt.spawn(TemplateUpdateTask::new(rx, hb.clone()));
 
-    let spa_dynamic = make_spa_dynamic(data, hb, &cfg.general.domain);
+    let loc = LocaleRoot::new(lr);
+    let spa_dynamic = make_spa_dynamic(tydb, loc, res, hb, &cfg.general.domain);
 
     //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path.clone()).or(spa_dynamic);

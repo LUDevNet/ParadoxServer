@@ -4,7 +4,7 @@ use crate::api::{
     map_res,
 };
 use assembly_core::buffer::CastError;
-use paradox_typed_db::TypedDatabase;
+use paradox_typed_db::{columns::MissionTasksColumn, TypedDatabase};
 use serde::Serialize;
 use std::convert::Infallible;
 use warp::{
@@ -26,7 +26,7 @@ fn rev_skill_id_api(db: &'_ TypedDatabase, rev: Rev, skill_id: i32) -> Result<Js
             index: &rev.inner.mission_task_uids,
             keys: I32Slice(&data.mission_tasks[..]),
             table: &db.mission_tasks,
-            id_col: db.mission_tasks.col_uid,
+            id_col: db.mission_tasks.get_col(MissionTasksColumn::Uid).unwrap(),
             layout: AdapterLayout::Map,
         };
         Api {

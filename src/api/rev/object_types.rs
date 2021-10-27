@@ -11,9 +11,8 @@ use warp::{
 
 use super::{common::ObjectTypeEmbedded, Ext};
 use crate::api::{
-    adapter::TypedTableIterAdapter,
     map_opt_res, map_res,
-    rev::{Api, Rev},
+    rev::{common::ObjectsRefAdapter, Api, Rev},
     PercentDecoded,
 };
 
@@ -35,7 +34,7 @@ fn rev_object_type_api(
                 object_ids: objects.as_ref(),
             },
             embedded: ObjectTypeEmbedded {
-                objects: TypedTableIterAdapter::new(&db.objects, objects),
+                objects: ObjectsRefAdapter::new(&db.objects, objects),
             },
         };
         warp::reply::json(&rep)
