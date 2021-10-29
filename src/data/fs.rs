@@ -4,7 +4,6 @@ use std::{
     ffi::OsStr,
     fs::{DirEntry, File},
     io::{self, ErrorKind},
-    os::unix::prelude::OsStrExt,
     path::{Component, Path, PathBuf},
 };
 
@@ -207,7 +206,7 @@ impl Loader {
                 _ => None,
             } {
                 let rel_path = rel_parent.join(&name);
-                let crc = calculate_crc(rel_path.as_os_str().as_bytes());
+                let crc = calculate_crc(rel_path.to_string_lossy().as_bytes());
                 self.entries.insert(
                     crc,
                     ServerNode {
