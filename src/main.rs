@@ -18,7 +18,12 @@ use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tokio::runtime::Handle;
 use tracing::log::LevelFilter;
-use warp::{filters::BoxedFilter, hyper::Uri, path::FullPath, Filter, Reply};
+use warp::{
+    filters::{header, BoxedFilter},
+    hyper::Uri,
+    path::FullPath,
+    query, Filter, Reply,
+};
 
 mod api;
 mod auth;
@@ -30,7 +35,7 @@ mod template;
 
 use crate::{
     api::rev::ReverseLookup,
-    auth::AuthKind,
+    auth::{AuthInfo, AuthKind, AuthQuery},
     config::AuthConfig,
     data::{fs::LuRes, locale::LocaleRoot},
     fallback::make_fallback,
@@ -120,7 +125,7 @@ async fn main() -> color_eyre::Result<()> {
         .and(warp::path("res"))
         .and(data::fs::make_file_filter(res_path));
 
-    let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_) })) {
+    let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_), .. })) {
         AuthKind::Basic
     } else {
         AuthKind::None
@@ -155,7 +160,8 @@ async fn main() -> color_eyre::Result<()> {
         fallback_routes
             .or(api_swagger)
             .or(file_routes)
-            .or(api_routes),
+            .or(api_routes)
+            .with(warp::compression::gzip()),
     );
 
     let spa_path = &cfg.data.explorer_spa;
@@ -192,9 +198,16 @@ async fn main() -> color_eyre::Result<()> {
 
     let auth_fn = auth::make_auth_fn(&cfg.auth);
 
-    let auth = warp::filters::header::optional::<String>("Authorization").and_then(auth_fn);
+    let auth = header::optional::<String>("Authorization")
+        .and(header::optional("User-Agent"))
+        .and(query::query::<AuthQuery>())
+        .map(AuthInfo::new)
+        .and_then(auth_fn);
 
-    let routes = auth.or(routes);
+    // Add a public route
+    let public = warp::fs::dir(cfg.data.public.clone());
+
+    let routes = public.or(auth).or(routes);
 
     let mut root = base_filter(cfg.general.base.as_deref()).boxed();
 

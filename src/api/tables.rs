@@ -164,7 +164,7 @@ fn table_all_api(db: Database<'_>, name: String) -> Result<Option<Json>, CastErr
     };
 
     let cols = table.column_iter();
-    let to_rows = || table.row_iter().take(100);
+    let to_rows = || table.row_iter()/*.take(100) */; // FIXME: reintroduce cap
 
     Ok(Some(warp::reply::json(&RowIter { cols, to_rows })))
 }
