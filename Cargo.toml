@@ -4,12 +4,33 @@ version = "0.1.0"
 authors = ["Xiphoseer <xiphoseer@mailbox.org>"]
 edition = "2018"
 
+[dependencies.assembly-core]
+git = "https://github.com/Xiphoseer/assembly_rs.git"
+rev = "d9cd46b29b7a7e92166b0f23a4082851ed04cffc"
+
+[dependencies.assembly-maps]
+git = "https://github.com/Xiphoseer/assembly_rs.git"
+rev = "d9cd46b29b7a7e92166b0f23a4082851ed04cffc"
+
+[dependencies.assembly-pack]
+git = "https://github.com/Xiphoseer/assembly_rs.git"
+rev = "d9cd46b29b7a7e92166b0f23a4082851ed04cffc"
+
+[dependencies.assembly-fdb]
+git = "https://github.com/Xiphoseer/assembly_rs.git"
+rev = "d9cd46b29b7a7e92166b0f23a4082851ed04cffc"
+default-features = false
+features = ["serde-derives"]
+
+[dependencies.assembly-xml]
+git = "https://github.com/Xiphoseer/assembly_rs.git"
+rev = "d9cd46b29b7a7e92166b0f23a4082851ed04cffc"
+
+[dependencies.paradox-typed-db]
+git = "https://github.com/Xiphoseer/paradox-typed-db.git"
+rev = "f9e35a5a35feaf14dc70ca75feff70760711dc6e"
+
 [dependencies]
-assembly-core = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
-assembly-maps = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
-assembly-pack = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
-assembly-fdb = { git = "https://github.com/Xiphoseer/assembly_rs.git", default-features = false, features = ["serde-derives"] }
-assembly-xml = { git = "https://github.com/Xiphoseer/assembly_rs.git" }
 base64 = "0.13"
 handlebars = "3.5"
 pretty_env_logger = "0.4.0"
@@ -19,7 +40,6 @@ color-eyre = "0.5.10"
 mapr = "0.8.0"
 notify = "5.0.0-pre.13"
 openapiv3 = "0.5"
-paradox-typed-db = { git = "https://github.com/Xiphoseer/paradox-typed-db.git"  }
 percent-encoding = "2.1.0"
 pin-project = "1.0"
 regex = "1.4"
