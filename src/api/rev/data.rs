@@ -8,7 +8,10 @@
 //! The [`ReverseLookup::new`] function is called once at startup of the server
 //! and the result is passed to the API filters.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 use assembly_fdb::common::Latin1Str;
 use paradox_typed_db::TypedDatabase;
@@ -72,12 +75,33 @@ pub struct FactionRev {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ObjectRev {
+    /// name
+    n: String,
+    /// description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d: Option<String>,
+    /// display_name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i: Option<String>,
+    /// internal_notes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    t: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectsRevData {
+    pub search_index: BTreeMap<i32, ObjectRev>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
 
+    pub objects: ObjectsRevData,
     pub object_types: BTreeMap<String, Vec<i32>>,
     pub component_use: BTreeMap<i32, ComponentsUse>,
     pub activities: BTreeMap<i32, ActivityRev>,
@@ -135,6 +159,10 @@ impl ReverseLookup {
                 .push(s.skill_set_id());
         }
 
+        let mut objects = ObjectsRevData {
+            search_index: BTreeMap::new(),
+        };
+
         let mut object_types = BTreeMap::<_, Vec<_>>::new();
         for o in db.objects.row_iter() {
             let id = o.id();
@@ -142,6 +170,24 @@ impl ReverseLookup {
 
             let entry = object_types.entry(ty).or_default();
             entry.push(id);
+
+            let name = o.name().decode().into_owned();
+            let description = o.description().map(Latin1Str::decode).map(Cow::into_owned);
+            let display_name = o.display_name().map(Latin1Str::decode).map(Cow::into_owned);
+            let internal_notes = o
+                .internal_notes()
+                .map(Latin1Str::decode)
+                .map(Cow::into_owned);
+
+            objects.search_index.insert(
+                id,
+                ObjectRev {
+                    n: name,
+                    d: description,
+                    i: display_name,
+                    t: internal_notes,
+                },
+            );
         }
 
         let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
@@ -213,6 +259,7 @@ impl ReverseLookup {
             mission_task_uids,
             mission_types,
 
+            objects,
             object_types,
             component_use,
             activities,

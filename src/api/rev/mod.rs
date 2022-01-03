@@ -22,6 +22,7 @@ mod component_types;
 mod loot_table_index;
 mod missions;
 mod object_types;
+mod objects;
 mod skills;
 
 pub use data::ReverseLookup;
@@ -45,6 +46,7 @@ fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
         "component_types",
         "loot_table_index",
         "mission_types",
+        "objects",
         "object_types",
         "skill_ids",
     ]))
@@ -76,6 +78,7 @@ pub(super) fn make_api_rev(
     let rev_component_types = component_types::component_types_api(&rev);
     let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
     let rev_mission_types = missions::mission_types_api(&rev, loc);
+    let rev_objects = objects::objects_api(&rev);
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
 
@@ -93,6 +96,8 @@ pub(super) fn make_api_rev(
         .or(rev_mission_types)
         .unify()
         .or(rev_object_types)
+        .unify()
+        .or(rev_objects)
         .unify()
         .or(rev_component_types)
         .unify()
