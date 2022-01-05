@@ -15,6 +15,10 @@ fn default_lu_json_cache() -> PathBuf {
     PathBuf::from("lu-json")
 }
 
+fn default_public() -> PathBuf {
+    PathBuf::from("public")
+}
+
 #[derive(Deserialize)]
 pub struct CorsOptions {
     pub all: bool,
@@ -66,6 +70,9 @@ pub struct TlsOptions {
 
 #[derive(Deserialize)]
 pub struct DataOptions {
+    /// The public directory
+    #[serde(default = "default_public")]
+    pub public: PathBuf,
     /// The `client/res` directory
     pub res: Option<PathBuf>,
     /// The `versions` directory
@@ -107,6 +114,10 @@ pub struct HostConfig {
 #[derive(Debug, Deserialize)]
 pub struct AuthConfig {
     pub basic: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub user_agents: Vec<String>,
+    #[serde(default)]
+    pub api_keys: Vec<String>,
 }
 
 #[derive(StructOpt)]
