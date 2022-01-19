@@ -51,7 +51,7 @@ impl LocaleRoot {
             if let Some(skill) = skills.int_children.get(&(id as u32)) {
                 if let Some(name_node) = skill.str_children.get("name") {
                     let name = name_node.value.as_ref().unwrap();
-                    the_name = Some(format!("{} | Item Set #{}", name, id));
+                    the_name = Some(format!("{} | Skill #{}", name, id));
                 }
                 if let Some(desc_node) = skill.str_children.get("descriptionUI") {
                     let desc = desc_node.value.as_ref().unwrap();
