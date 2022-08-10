@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
+use clap::Parser;
 use serde::Deserialize;
-use structopt::StructOpt;
 
 fn default_port() -> u16 {
     3030
@@ -120,9 +120,9 @@ pub struct AuthConfig {
     pub api_keys: Vec<String>,
 }
 
-#[derive(StructOpt)]
+#[derive(Parser)]
 /// Starts the server that serves a JSON API to the client files
 pub struct Options {
-    #[structopt(long, default_value = "paradox.toml")]
+    #[clap(long, default_value = "paradox.toml")]
     pub cfg: PathBuf,
 }

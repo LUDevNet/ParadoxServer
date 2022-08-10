@@ -8,13 +8,12 @@ use std::{
 use api::ApiFactory;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
+use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-//use handlebars::Handlebars;
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
-use structopt::StructOpt;
 use template::make_spa_dynamic;
 use tokio::runtime::Handle;
 use tracing::log::LevelFilter;
@@ -50,7 +49,7 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     color_eyre::install()?;
-    let opts = Options::from_args();
+    let opts = Options::parse();
 
     let cfg_path = opts.cfg;
     let cfg_file = std::fs::read_to_string(&cfg_path)
