@@ -10,7 +10,7 @@ use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-use handlebars::Handlebars;
+//use handlebars::Handlebars;
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
@@ -168,7 +168,7 @@ async fn main() -> color_eyre::Result<()> {
     let spa_index = spa_path.join("index.html");
 
     // Create handlebars registry
-    let hb = Arc::new(RwLock::new(Handlebars::new()));
+    let hb = Arc::new(RwLock::new(template::Template::new()));
 
     load_meta_template(&hb, &spa_index)?;
 

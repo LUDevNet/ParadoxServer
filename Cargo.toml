@@ -32,7 +32,6 @@ rev = "032830eb09c492718c926eebf12be4f727d38676"
 
 [dependencies]
 base64 = "0.13"
-handlebars = "3.5"
 pretty_env_logger = "0.4.0"
 structopt = "0.3.21"
 color-eyre = "0.5.10"

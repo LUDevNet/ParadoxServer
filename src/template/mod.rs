@@ -11,13 +11,15 @@ use std::{
     task::Poll,
 };
 
-use handlebars::Handlebars;
+//use handlebars::Handlebars;
 use paradox_typed_db::{ext::MissionKind, TypedDatabase};
 use regex::{Captures, Regex};
-use serde::Serialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
 use warp::{filters::BoxedFilter, path::FullPath, Filter};
+
+mod minihb;
+pub(crate) use minihb::Template;
 
 use crate::data::{
     fs::{cleanup_path, LuRes},
@@ -63,13 +65,13 @@ impl notify::EventHandler for FsEventHandler {
 #[pin_project]
 pub struct TemplateUpdateTask {
     rx: Receiver<notify::Result<notify::Event>>,
-    hb: Arc<RwLock<Handlebars<'static>>>,
+    hb: Arc<RwLock<Template>>,
 }
 
 impl TemplateUpdateTask {
-    pub fn new(
+    pub(crate) fn new(
         rx: Receiver<notify::Result<notify::Event>>,
-        hb: Arc<RwLock<Handlebars<'static>>>,
+        hb: Arc<RwLock<Template>>,
     ) -> Self {
         Self { rx, hb }
     }
@@ -112,8 +114,8 @@ impl std::future::Future for TemplateUpdateTask {
     }
 }
 
-pub fn load_meta_template(
-    reg: &RwLock<handlebars::Handlebars>,
+pub(crate) fn load_meta_template(
+    reg: &RwLock<Template>,
     path: &Path,
 ) -> Result<(), color_eyre::Report> {
     info!("(re-)loading template.html");
@@ -123,24 +125,17 @@ pub fn load_meta_template(
     let mut hb = reg
         .write()
         .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire handlebars lock: {}", e))?;
-    hb.register_template_string("template.html", tpl_str)?;
+    hb.set_text(tpl_str);
     Ok(())
 }
 
-pub struct WithTemplate<T: Serialize> {
-    pub name: &'static str,
-    pub value: T,
-}
-
-pub fn render<T>(template: WithTemplate<T>, hbs: Arc<RwLock<Handlebars>>) -> impl warp::Reply
+pub(crate) fn render<T>(data: T, hbs: Arc<RwLock<Template>>) -> impl warp::Reply
 where
-    T: Serialize,
+    T: minihb::Lookup,
 {
     match hbs.read() {
         Ok(hb) => {
-            let render = hb
-                .render(template.name, &template.value)
-                .unwrap_or_else(|err| err.to_string());
+            let render = hb.render(&data);
             warp::reply::html(render)
         }
         Err(e) => {
@@ -280,7 +275,6 @@ fn skill_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: 
     }
 }
 
-#[derive(Serialize)]
 pub struct IndexParams {
     pub title: Cow<'static, str>,
     pub description: Cow<'static, str>,
@@ -289,6 +283,21 @@ pub struct IndexParams {
     pub url: Cow<'static, str>,
     pub card: &'static str,
     pub site: Cow<'static, str>,
+}
+
+impl minihb::Lookup for IndexParams {
+    fn field(&self, key: &str) -> &dyn std::fmt::Display {
+        match key {
+            "title" => &self.title,
+            "description" => &self.description,
+            "type" => &self.r#type,
+            "image" => &self.image,
+            "url" => &self.url,
+            "card" => &self.card,
+            "site" => &self.site,
+            _ => &"",
+        }
+    }
 }
 
 static DEFAULT_IMG: &str = "/ui/ingame/freetrialcongratulations_id.png";
@@ -378,7 +387,7 @@ pub(crate) fn make_spa_dynamic(
     data: &'static TypedDatabase<'static>,
     loc: LocaleRoot,
     res: LuRes,
-    hb: Arc<RwLock<Handlebars<'static>>>,
+    hb: Arc<RwLock<Template>>,
     domain: &str,
     //    hnd: ArcHandle<B, FDBHeader>,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -399,20 +408,17 @@ pub(crate) fn make_spa_dynamic(
         .and(meta(data, loc, res))
         .and(warp::path::full())
         .map(
-            move |dom: &str, meta: Meta, full_path: FullPath| WithTemplate {
-                name: "template.html",
-                value: IndexParams {
-                    title: meta.title,
-                    r#type: "website",
-                    card: "summary",
-                    description: meta.description,
-                    site: Cow::Borrowed("@lu_explorer"),
-                    image: meta
-                        .image
-                        .map(Cow::Owned)
-                        .unwrap_or(Cow::Borrowed(default_img)),
-                    url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
-                },
+            move |dom: &str, meta: Meta, full_path: FullPath| IndexParams {
+                title: meta.title,
+                r#type: "website",
+                card: "summary",
+                description: meta.description,
+                site: Cow::Borrowed("@lu_explorer"),
+                image: meta
+                    .image
+                    .map(Cow::Owned)
+                    .unwrap_or(Cow::Borrowed(default_img)),
+                url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
             },
         )
         .map(handlebars)
