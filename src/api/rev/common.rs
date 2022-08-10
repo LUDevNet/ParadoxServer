@@ -128,7 +128,7 @@ impl<'a, 'b> Serialize for MissionsTaskIconsAdapter<'a, 'b> {
     }
 }
 
-impl<'a> FindHash for HashMap<i32, MissionTaskUIDLookup> {
+impl FindHash for HashMap<i32, MissionTaskUIDLookup> {
     fn find_hash(&self, v: i32) -> Option<i32> {
         self.get(&v).map(|r| r.mission)
     }
