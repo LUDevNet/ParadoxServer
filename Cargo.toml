@@ -32,7 +32,11 @@ rev = "032830eb09c492718c926eebf12be4f727d38676"
 
 [dependencies]
 base64 = "0.13"
+futures-util = "0.3.21"
 pretty_env_logger = "0.4.0"
+http = "0.2.2"
+http-body = "0.4.5"
+hyper = "0.14"
 mapr = "0.8.0"
 notify = "5.0.0-pre.13"
 openapiv3 = "0.5"
@@ -41,11 +45,21 @@ pin-project = "1.0"
 regex = "1.4"
 serde_yaml = "0.8"
 toml = "0.5"
+tower-service = "0.3.2"
 tracing = "0.1"
+form_urlencoded = "1.0.1"
 
 [dependencies.clap]
 version = "3.2.16"
 features = ["derive"]
+
+[dependencies.tower]
+version = "0.4.1"
+features = ["make", "util"]
+
+[dependencies.tower-http]
+version = "0.3.4"
+features = ["fs", "auth"]
 
 [dependencies.color-eyre]
 version = "0.6.2"

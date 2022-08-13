@@ -1,10 +1,16 @@
 use std::{
+    collections::HashSet,
+    marker::PhantomData,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
-use serde::Deserialize;
+use http::{
+    header::{AUTHORIZATION, USER_AGENT, WWW_AUTHENTICATE},
+    HeaderValue, Request, Response,
+};
+use tower_http::auth::AuthorizeRequest;
 use warp::{
     hyper::StatusCode,
     reply::{with_header, with_status, Html, WithHeader, WithStatus},
@@ -12,32 +18,6 @@ use warp::{
 };
 
 use crate::config::AuthConfig;
-
-#[derive(Deserialize)]
-pub struct AuthQuery {
-    #[serde(default, rename = "apiKey")]
-    api_key: Option<String>,
-}
-
-pub struct AuthInfo {
-    authorization: Option<String>,
-    user_agent: Option<String>,
-    query: AuthQuery,
-}
-
-impl AuthInfo {
-    pub fn new(
-        authorization: Option<String>,
-        user_agent: Option<String>,
-        query: AuthQuery,
-    ) -> Self {
-        Self {
-            authorization,
-            user_agent,
-            query,
-        }
-    }
-}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum AuthKind {
@@ -48,9 +28,9 @@ pub enum AuthKind {
 }
 
 pub struct BasicCfg {
-    allowed_credentials: Vec<String>,
-    allowed_bots: Vec<String>,
-    allowed_api_keys: Vec<String>,
+    allowed_credentials: HashSet<String>,
+    allowed_bots: HashSet<String>,
+    allowed_api_keys: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -91,52 +71,92 @@ impl Future for CheckFuture {
 }
 
 impl AuthImpl {
-    fn check(&self, auth: AuthInfo) -> CheckFuture {
-        match self {
-            Self::None => return CheckFuture { is_allowed: true },
-            Self::Basic(cfg) => {
-                if let Some(header) = auth.authorization {
-                    if let Some(hash) = header.strip_prefix("Basic ") {
-                        if cfg.allowed_credentials.iter().any(|x| x == hash) {
-                            return CheckFuture { is_allowed: true };
-                        }
-                    }
-                }
-                if let Some(api_key) = &auth.query.api_key {
-                    if cfg.allowed_api_keys.contains(api_key) {
-                        return CheckFuture { is_allowed: true };
-                    }
-                }
-                if let Some(ua) = auth.user_agent {
-                    for allowed in cfg.allowed_bots.iter() {
-                        if ua.contains(allowed) {
-                            return CheckFuture { is_allowed: true };
-                        }
-                    }
-                }
+    pub fn new(cfg: Option<&AuthConfig>) -> Self {
+        let mut auth_impl = AuthImpl::None;
+        if let Some(auth_cfg) = cfg {
+            if let Some(basic_auth_cfg) = &auth_cfg.basic {
+                let allowed_credentials: HashSet<String> = basic_auth_cfg
+                    .iter()
+                    .map(|(user, password)| {
+                        let text = format!("{}:{}", user, password);
+                        base64::encode(&text)
+                    })
+                    .collect();
+                auth_impl = AuthImpl::Basic(Arc::new(BasicCfg {
+                    allowed_credentials,
+                    allowed_bots: auth_cfg.user_agents.iter().cloned().collect(),
+                    allowed_api_keys: auth_cfg.api_keys.iter().cloned().collect(),
+                }));
             }
         }
-        CheckFuture { is_allowed: false }
+        auth_impl
     }
 }
 
-pub fn make_auth_fn(cfg: &Option<AuthConfig>) -> impl Fn(AuthInfo) -> CheckFuture + Clone {
-    let mut auth_impl = AuthImpl::None;
-    if let Some(auth_cfg) = cfg {
-        if let Some(basic_auth_cfg) = &auth_cfg.basic {
-            let allowed_credentials: Vec<String> = basic_auth_cfg
-                .iter()
-                .map(|(user, password)| {
-                    let text = format!("{}:{}", user, password);
-                    base64::encode(&text)
-                })
-                .collect();
-            auth_impl = AuthImpl::Basic(Arc::new(BasicCfg {
-                allowed_credentials,
-                allowed_bots: auth_cfg.user_agents.clone(),
-                allowed_api_keys: auth_cfg.api_keys.clone(),
-            }));
+impl<R> Clone for Authorize<R> {
+    fn clone(&self) -> Self {
+        Self {
+            _p: self._p,
+            kind: self.kind.clone(),
         }
     }
-    move |v: AuthInfo| auth_impl.check(v)
+}
+
+pub struct Authorize<R> {
+    kind: AuthImpl,
+    _p: PhantomData<fn() -> R>,
+}
+
+impl<R> Authorize<R> {
+    pub fn new(cfg: &Option<AuthConfig>) -> Self {
+        Self {
+            kind: AuthImpl::new(cfg.as_ref()),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<B: http_body::Body, R: http_body::Body + Default> AuthorizeRequest<B> for Authorize<R> {
+    type ResponseBody = R;
+
+    fn authorize(&mut self, request: &mut Request<B>) -> Result<(), Response<Self::ResponseBody>> {
+        match &self.kind {
+            AuthImpl::None => Ok(()),
+            AuthImpl::Basic(cfg) => {
+                if let Some(Ok(authorization)) = request
+                    .headers()
+                    .get(AUTHORIZATION)
+                    .map(HeaderValue::to_str)
+                {
+                    if let Some(credentials) = authorization.strip_prefix("Basic ") {
+                        if cfg.allowed_credentials.contains(credentials) {
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(query) = request.uri().query() {
+                    let parse = form_urlencoded::parse(query.as_bytes());
+                    for (key, value) in parse {
+                        if key == "apiKey" && cfg.allowed_api_keys.contains(value.as_ref()) {
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some(Ok(user_agent)) =
+                    request.headers().get(USER_AGENT).map(HeaderValue::to_str)
+                {
+                    if cfg.allowed_bots.contains(user_agent) {
+                        return Ok(());
+                    }
+                }
+                let mut response = Response::new(R::default());
+                *response.status_mut() = StatusCode::UNAUTHORIZED;
+                response.headers_mut().append(
+                    WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Basic realm=\"LU-Explorer\""),
+                );
+                Err(response)
+            }
+        }
+    }
 }

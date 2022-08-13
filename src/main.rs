@@ -1,5 +1,9 @@
 use std::{
+    convert::Infallible,
     fs::File,
+    io,
+    iter::once,
+    net::SocketAddr,
     path::Path,
     str::FromStr,
     sync::{Arc, RwLock},
@@ -8,14 +12,29 @@ use std::{
 use api::ApiFactory;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
+use auth::{AuthImpl, Authorize};
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
+use http::{
+    header::{HeaderName, AUTHORIZATION, CONTENT_TYPE},
+    Request, Response,
+};
+use http_body::combinators::UnsyncBoxBody;
+use hyper::{
+    body::{Bytes, HttpBody},
+    server::Server,
+    service::make_service_fn,
+    Body, Error,
+};
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
+use services::BaseRouter;
 use template::make_spa_dynamic;
 use tokio::runtime::Handle;
+use tower::{make::Shared, service_fn, Service, ServiceBuilder, ServiceExt};
+use tower_http::auth::RequireAuthorization;
 use tracing::log::LevelFilter;
 use warp::{
     filters::{header, BoxedFilter},
@@ -30,17 +49,51 @@ mod config;
 mod data;
 mod fallback;
 mod redirect;
+mod services;
 mod template;
 
 use crate::{
     api::rev::ReverseLookup,
-    auth::{AuthInfo, AuthKind, AuthQuery},
+    auth::AuthKind,
     config::AuthConfig,
     data::{fs::LuRes, locale::LocaleRoot},
     fallback::make_fallback,
     redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
+
+async fn handler_api(
+    _request: Request<hyper::body::Body>,
+) -> Result<Response<hyper::body::Body>, io::Error> {
+    Ok(Response::new(hyper::body::Body::from("Hello API!")))
+}
+
+async fn handler_app(
+    _request: Request<hyper::body::Body>,
+) -> Result<Response<hyper::body::Body>, io::Error> {
+    Ok(Response::new(hyper::body::Body::from("Hello App!")))
+}
+
+async fn handler_assets(
+    _request: Request<hyper::body::Body>,
+) -> Result<Response<hyper::body::Body>, io::Error> {
+    Ok(Response::new(hyper::body::Body::from("Hello Assets!")))
+}
+
+fn new_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, error)
+}
+
+fn response_to_boxed_error_io<B: http_body::Body<Data = Bytes> + Send + 'static>(
+    r: Response<B>,
+) -> Response<ResponseBody>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    r.map(|b| HttpBody::map_err(b, new_io_error).boxed_unsync())
+}
+
+type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -184,7 +237,6 @@ async fn main() -> color_eyre::Result<()> {
     let loc = LocaleRoot::new(lr);
     let spa_dynamic = make_spa_dynamic(tydb, loc, res, hb, &cfg.general.domain);
 
-    //let spa_file = warp::fs::file(spa_index);
     let spa = warp::fs::dir(spa_path.clone()).or(spa_dynamic);
 
     // Initialize the lu-res cache
@@ -195,42 +247,39 @@ async fn main() -> color_eyre::Result<()> {
     // Finally collect all routes
     let routes = res.or(api).or(spa);
 
-    let auth_fn = auth::make_auth_fn(&cfg.auth);
+    let auth = Authorize::new(&cfg.auth);
 
-    let auth = header::optional::<String>("Authorization")
-        .and(header::optional("User-Agent"))
-        .and(query::query::<AuthQuery>())
-        .map(AuthInfo::new)
-        .and_then(auth_fn);
+    let api_service = service_fn(handler_api);
+    let app_service = service_fn(handler_app);
+    let assets_service = service_fn(handler_assets);
 
-    // Add a public route
-    let public = warp::fs::dir(cfg.data.public.clone());
+    let routes = BaseRouter::new(api_service, app_service, assets_service);
+    let service = RequireAuthorization::custom(routes, auth);
+    let routes = services::PublicOr::new(service, &cfg.data.public);
 
-    let routes = public.or(auth).or(routes);
+    //let routes = public.or(auth).or(routes);
 
-    let mut root = base_filter(cfg.general.base.as_deref()).boxed();
+    // FIXME: base filters
+    //let mut root = base_filter(cfg.general.base.as_deref()).boxed();
+    //root = add_host_filters(root, &cfg.host);
+    //let routes = root.and(routes).boxed();
 
-    root = add_host_filters(root, &cfg.host);
-
-    let routes = root.and(routes).boxed();
-
+    // FIXME: Redirect middleware
+    /*
     let mut redirect: BoxedFilter<(_,)> = warp::any()
         .and_then(|| async move { Err(warp::reject()) })
         .boxed();
 
     redirect = add_redirect_filters(redirect, &cfg);
-
     let routes = redirect.or(routes);
-    let log = warp::log("paradox::routes");
-    let routes = routes.with(log);
+     */
 
-    let ip = if cfg.general.public {
-        [0, 0, 0, 0]
-    } else {
-        [127, 0, 0, 1]
-    };
+    // FIXME: Log middleware
+    //let log = warp::log("paradox::routes");
+    //let routes = routes.with(log);
 
-    let mut cors = warp::cors();
+    // FIXME: CORS middleware
+    /*let mut cors = warp::cors();
     let cors_cfg = &cfg.general.cors;
     if cors_cfg.all {
         cors = cors.allow_any_origin();
@@ -238,14 +287,21 @@ async fn main() -> color_eyre::Result<()> {
         for key in &cors_cfg.domains {
             cors = cors.allow_origin(key.as_ref());
         }
-    }
-    cors = cors
+    }*/
+
+    /*cors = cors
         .allow_methods(vec!["OPTIONS", "GET"])
         .allow_headers(vec!["authorization"]);
-    let to_serve = routes.with(cors);
-    let server = warp::serve(to_serve);
+    let to_serve = routes.with(cors);*/
+    //let server = warp::serve(to_serve);
 
-    if let Some(tls_cfg) = cfg.tls {
+    let ip = match cfg.general.public {
+        true => [0, 0, 0, 0],
+        false => [127, 0, 0, 1],
+    };
+
+    // FIXME: TLS
+    /*if let Some(tls_cfg) = cfg.tls {
         if tls_cfg.enabled {
             server
                 .tls()
@@ -255,8 +311,17 @@ async fn main() -> color_eyre::Result<()> {
                 .await;
             return Ok(());
         }
-    }
-    server.run((ip, cfg.general.port)).await;
+    }*/
+
+    //server.run((ip, cfg.general.port)).await;
+    let service = ServiceBuilder::new().service(routes);
+
+    // And run our service using `hyper`
+    let addr = SocketAddr::from((ip, cfg.general.port));
+    Server::bind(&addr)
+        .serve(Shared::new(service))
+        .await
+        .expect("server error");
 
     Ok(())
 }

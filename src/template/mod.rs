@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, RwLock},
     task::Poll,
 };
+use tower_service::Service;
 
 //use handlebars::Handlebars;
 use paradox_typed_db::{ext::MissionKind, TypedDatabase};
@@ -382,6 +383,35 @@ fn meta<'r>(
         .unify()
 }
 
+#[derive(Clone)]
+struct RenderService {
+    template: Arc<RwLock<Template>>,
+}
+
+#[derive(Debug)]
+struct LockError;
+
+impl warp::reject::Reject for LockError {}
+
+impl tower_service::Service<IndexParams> for RenderService {
+    type Response = String;
+    type Error = LockError;
+    type Future = std::future::Ready<Result<String, LockError>>;
+
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: IndexParams) -> Self::Future {
+        std::future::ready(
+            self.template
+                .read()
+                .map(|r| r.render(&req))
+                .map_err(|_| LockError),
+        )
+    }
+}
+
 #[allow(clippy::needless_lifetimes)] // false positive?
 pub(crate) fn make_spa_dynamic(
     data: &'static TypedDatabase<'static>,
@@ -401,7 +431,8 @@ pub(crate) fn make_spa_dynamic(
     let default_img: &'static str = Box::leak(default_img.into_boxed_str());
 
     // Create a reusable closure to render template
-    let handlebars = move |with_template| render(with_template, hb.clone());
+    //let handlebars = move |with_template| render(with_template, hb.clone());
+    let render = RenderService { template: hb };
 
     warp::any()
         .and(dom)
@@ -421,6 +452,9 @@ pub(crate) fn make_spa_dynamic(
                 url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
             },
         )
-        .map(handlebars)
+        .and_then(move |v: IndexParams| {
+            let mut render = render.clone();
+            async move { render.call(v).await.map_err(warp::reject::custom) }
+        })
         .boxed()
 }
