@@ -1,12 +1,14 @@
 use color_eyre::eyre::Context;
+use http::{uri::PathAndQuery, Response};
 use notify::event::{AccessKind, AccessMode, EventKind, RemoveKind};
 use pin_project::pin_project;
 use std::{
     borrow::Cow,
-    convert::Infallible,
     ffi::OsStr,
-    fmt::Write,
+    fmt::{self, Write},
+    io,
     path::Path,
+    pin::Pin,
     sync::{Arc, RwLock},
     task::Poll,
 };
@@ -17,7 +19,6 @@ use paradox_typed_db::{ext::MissionKind, TypedDatabase};
 use regex::{Captures, Regex};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info};
-use warp::{filters::BoxedFilter, path::FullPath, Filter};
 
 mod minihb;
 pub(crate) use minihb::Template;
@@ -130,22 +131,6 @@ pub(crate) fn load_meta_template(
     Ok(())
 }
 
-pub(crate) fn render<T>(data: T, hbs: Arc<RwLock<Template>>) -> impl warp::Reply
-where
-    T: minihb::Lookup,
-{
-    match hbs.read() {
-        Ok(hb) => {
-            let render = hb.render(&data);
-            warp::reply::html(render)
-        }
-        Err(e) => {
-            error!("Could not acquire lock on Handlebars Registry: {}", e);
-            warp::reply::html(String::from("Internal Server Error"))
-        }
-    }
-}
-
 /// Retrieve metadata for /missions/:id
 fn mission_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
     let mut image = None;
@@ -251,7 +236,7 @@ fn item_set_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, i
 }
 
 /// Retrieve metadata for /skills/:id
-fn skill_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: i32) -> Meta {
+fn skill_get_impl(data: &'_ TypedDatabase<'_>, loc: &LocaleRoot, res: &LuRes, id: i32) -> Meta {
     let (mut title, description) = loc.get_skill_name_desc(id);
     let description = description.map(Cow::Owned).unwrap_or(Cow::Borrowed(""));
     let mut image = None;
@@ -273,6 +258,68 @@ fn skill_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id: 
         title: Cow::Owned(title),
         description,
         image,
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum SpaRoute {
+    Dashboard,
+    Objects,
+    ObjectById { id: i32 },
+    Missions,
+    MissionById(i32),
+    Skills,
+    SkillById { id: i32 },
+    ItemSets,
+    ItemSetById { id: i32 },
+}
+
+impl SpaRoute {
+    fn parse(path: &str) -> Option<Self> {
+        let mut split = path.strip_prefix('/').unwrap_or(path).split('/');
+        match split.next() {
+            Some("dashboard") => Some(Self::Dashboard),
+            Some("objects") => match split.next() {
+                Some("item-sets") => match split.next() {
+                    Some(x) => match x.parse::<i32>() {
+                        Ok(id) => Some(Self::ItemSetById { id }),
+                        Err(_) => None,
+                    },
+                    _ => Some(Self::ItemSets),
+                },
+                Some(x) => match x.parse::<i32>() {
+                    Ok(id) => Some(Self::ObjectById { id }),
+                    Err(_) => None,
+                },
+                _ => Some(Self::Objects),
+            },
+            Some("missions") => match split.next() {
+                Some(x) => x.parse::<i32>().ok().map(Self::MissionById),
+                _ => Some(Self::Missions),
+            },
+            Some("skills") => match split.next() {
+                Some(x) => match x.parse::<i32>() {
+                    Ok(id) => Some(Self::SkillById { id }),
+                    Err(_) => None,
+                },
+                _ => Some(Self::Skills),
+            },
+            _ => None,
+        }
+    }
+
+    fn to_meta(self, data: &'_ TypedDatabase<'_>, loc: &LocaleRoot, res: &LuRes) -> Meta {
+        match self {
+            Self::Dashboard => Meta::DASHBOARD,
+            Self::Objects => Meta::OBJECTS,
+            Self::ObjectById { id } => object_get_api(data, loc.clone(), res.clone(), id),
+            Self::Missions => Meta::MISSIONS,
+            Self::MissionById(id) => mission_get_impl(data, loc.clone(), res.clone(), id),
+            Self::Skills => Meta::SKILLS,
+            Self::SkillById { id } => skill_get_impl(data, loc, res, id),
+            Self::ItemSets => Meta::ITEM_SETS,
+            Self::ItemSetById { id } => item_set_get_impl(data, loc.clone(), res.clone(), id),
+        }
     }
 }
 
@@ -310,77 +357,46 @@ struct Meta {
     image: Option<String>,
 }
 
-fn meta<'r>(
-    data: &'static TypedDatabase<'static>,
-    loc: LocaleRoot,
-    res: LuRes,
-) -> impl Filter<Extract = (Meta,), Error = Infallible> + Clone + 'r {
-    let d = warp::any().map(move || data);
-    let l = warp::any().map(move || loc.clone());
-    let r = warp::any().map(move || res.clone());
-    let base = d.and(l).and(r);
-
-    let dashboard = warp::path("dashboard").and(warp::path::end()).map(|| Meta {
+impl Meta {
+    const DASHBOARD: Self = Self {
         title: Cow::Borrowed("Dashboard"),
         description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
         image: None,
-    });
+    };
 
-    let objects_end = warp::path::end().map(|| Meta {
+    const OBJECTS: Self = Self {
         title: Cow::Borrowed("Objects"),
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
-    });
-    let object_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(object_get_api);
-    let item_sets_end = warp::path::end().map(|| Meta {
+    };
+
+    const ITEM_SETS: Self = Self {
         title: Cow::Borrowed("Item Sets"),
         description: Cow::Borrowed("Check out the LEGO Universe Objects"),
         image: None,
-    });
-    let item_set_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(item_set_get_impl);
-    let item_sets = warp::path("item-sets").and(item_sets_end.or(item_set_get).unify());
-    let objects =
-        warp::path("objects").and(objects_end.or(object_get).unify().or(item_sets).unify());
+    };
 
-    let missions_end = warp::path::end().map(move || Meta {
+    const MISSIONS: Self = Self {
         title: Cow::Borrowed("Missions"),
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
         image: None,
-    });
-    let mission_get = base
-        .clone()
-        .and(warp::path::param::<i32>())
-        .map(mission_get_impl);
-    let missions = warp::path("missions").and(missions_end.or(mission_get).unify());
+    };
 
-    let skills_end = warp::path::end().map(move || Meta {
+    const SKILLS: Self = Self {
         title: Cow::Borrowed("Skills"),
         description: Cow::Borrowed("Check out the LEGO Universe Missions"),
         image: None,
-    });
-    let skill_get = base.and(warp::path::param::<i32>()).map(skill_get_impl);
-    let skills = warp::path("skills").and(skills_end.or(skill_get).unify());
+    };
+}
 
-    let catch = warp::any().map(move || Meta {
-        title: Cow::Borrowed("LU-Explorer"),
-        description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
-        image: None,
-    });
-    objects
-        .or(missions)
-        .unify()
-        .or(dashboard)
-        .unify()
-        .or(skills)
-        .unify()
-        .or(catch)
-        .unify()
+impl Default for Meta {
+    fn default() -> Self {
+        Self {
+            title: Cow::Borrowed("LU-Explorer"),
+            description: Cow::Borrowed("Check out the LEGO Universe Game Data"),
+            image: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -391,12 +407,19 @@ struct RenderService {
 #[derive(Debug)]
 struct LockError;
 
+impl fmt::Display for LockError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LockError")
+    }
+}
+
+impl std::error::Error for LockError {}
 impl warp::reject::Reject for LockError {}
 
 impl tower_service::Service<IndexParams> for RenderService {
     type Response = String;
     type Error = LockError;
-    type Future = std::future::Ready<Result<String, LockError>>;
+    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -407,54 +430,106 @@ impl tower_service::Service<IndexParams> for RenderService {
             self.template
                 .read()
                 .map(|r| r.render(&req))
-                .map_err(|_| LockError),
+                .map_err(|_e| LockError),
         )
     }
 }
 
-#[allow(clippy::needless_lifetimes)] // false positive?
-pub(crate) fn make_spa_dynamic(
+#[derive(Clone)]
+pub(crate) struct SpaDynamic {
+    inner: RenderService,
     data: &'static TypedDatabase<'static>,
+    default_img: &'static str,
     loc: LocaleRoot,
     res: LuRes,
-    hb: Arc<RwLock<Template>>,
-    domain: &str,
-    //    hnd: ArcHandle<B, FDBHeader>,
-) -> BoxedFilter<(impl warp::Reply,)> {
-    let dom = {
-        let d = Box::leak(domain.to_string().into_boxed_str()) as &str;
-        warp::any().map(move || d)
-    };
+    dom: &'static str,
+}
 
-    // Prepare the default image
-    let default_img = res.to_res_href(Path::new(DEFAULT_IMG));
-    let default_img: &'static str = Box::leak(default_img.into_boxed_str());
+impl SpaDynamic {
+    pub fn new(
+        data: &'static TypedDatabase<'static>,
+        loc: LocaleRoot,
+        res: LuRes,
+        hb: Arc<RwLock<Template>>,
+        domain: &str,
+    ) -> Self {
+        let dom = Box::leak(domain.to_string().into_boxed_str()) as &str;
 
-    // Create a reusable closure to render template
-    //let handlebars = move |with_template| render(with_template, hb.clone());
-    let render = RenderService { template: hb };
+        // Prepare the default image
+        let default_img = res.to_res_href(Path::new(DEFAULT_IMG));
+        let default_img: &'static str = Box::leak(default_img.into_boxed_str());
 
-    warp::any()
-        .and(dom)
-        .and(meta(data, loc, res))
-        .and(warp::path::full())
-        .map(
-            move |dom: &str, meta: Meta, full_path: FullPath| IndexParams {
-                title: meta.title,
-                r#type: "website",
-                card: "summary",
-                description: meta.description,
-                site: Cow::Borrowed("@lu_explorer"),
-                image: meta
-                    .image
-                    .map(Cow::Owned)
-                    .unwrap_or(Cow::Borrowed(default_img)),
-                url: Cow::Owned(format!("https://{}{}", dom, full_path.as_str())),
-            },
-        )
-        .and_then(move |v: IndexParams| {
-            let mut render = render.clone();
-            async move { render.call(v).await.map_err(warp::reject::custom) }
+        // Create a reusable closure to render template
+        let inner = RenderService { template: hb };
+        Self {
+            inner,
+            data,
+            loc,
+            res,
+            default_img,
+            dom,
+        }
+    }
+
+    fn meta<ReqBody>(&self, req: &http::Request<ReqBody>) -> Meta {
+        let path = req.uri().path();
+        if let Some(route) = SpaRoute::parse(path) {
+            route.to_meta(self.data, &self.loc, &self.res)
+        } else {
+            Meta::default()
+        }
+    }
+}
+
+#[pin_project]
+pub struct SpaFuture {
+    #[pin]
+    inner: std::future::Ready<Result<String, LockError>>,
+}
+
+impl std::future::Future for SpaFuture {
+    type Output = Result<Response<hyper::Body>, io::Error>;
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        self.project().inner.poll(cx).map(|r| match r {
+            Ok(s) => Ok(Response::new(hyper::Body::from(s))),
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         })
-        .boxed()
+    }
+}
+
+impl<ReqBody> Service<http::Request<ReqBody>> for SpaDynamic
+where
+    ReqBody: Send + 'static,
+{
+    type Response = Response<hyper::Body>;
+    type Error = io::Error;
+    type Future = SpaFuture;
+
+    fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
+        let meta = self.meta(&req);
+        let full_path = req
+            .uri()
+            .path_and_query()
+            .map(PathAndQuery::as_str)
+            .unwrap_or_default();
+        let params = IndexParams {
+            title: meta.title,
+            r#type: "website",
+            card: "summary",
+            description: meta.description,
+            site: Cow::Borrowed("@lu_explorer"),
+            image: meta
+                .image
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed(self.default_img)),
+            url: Cow::Owned(format!("https://{}{}", self.dom, full_path)),
+        };
+        SpaFuture {
+            inner: self.inner.call(params),
+        }
+    }
 }

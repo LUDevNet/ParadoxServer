@@ -1,4 +1,9 @@
-use std::{io, path::Path, task::Poll};
+use std::{
+    fmt, io,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use futures_util::{future::BoxFuture, FutureExt};
 use http::{
@@ -9,6 +14,42 @@ use hyper::body::{Bytes, HttpBody};
 use pin_project::pin_project;
 use tower::Service;
 use tower_http::services::{fs::DefaultServeDirFallback, ServeDir};
+
+#[derive(Debug)]
+pub enum Error {
+    Hyper(hyper::Error),
+    Io(io::Error),
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<hyper::Error> for Error {
+    fn from(e: hyper::Error) -> Self {
+        Self::Hyper(e)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Hyper(e) => Some(e),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => fmt::Display::fmt(e, f),
+            Self::Hyper(e) => fmt::Display::fmt(e, f),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PublicOr<I> {
@@ -38,7 +79,7 @@ where
     type Error = io::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match Service::<Request<ReqBody>>::poll_ready(&mut self.public, cx) {
             Poll::Ready(Ok(())) => match self.inner.poll_ready(cx) {
                 Poll::Pending => Poll::Pending,
@@ -100,33 +141,33 @@ impl<A, P, S> Default for BaseRouterResponseBody<A, P, S> {
 impl<A, P, S> http_body::Body for BaseRouterResponseBody<A, P, S>
 where
     A: http_body::Body<Data = Bytes, Error = hyper::Error>,
-    P: http_body::Body<Data = Bytes, Error = hyper::Error>,
-    S: http_body::Body<Data = Bytes, Error = hyper::Error>,
+    P: http_body::Body<Data = Bytes, Error = io::Error>,
+    S: http_body::Body<Data = Bytes, Error = io::Error>,
 {
     type Data = Bytes;
-    type Error = hyper::Error;
+    type Error = Error;
 
     fn poll_data(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Self::Data, Self::Error>>> {
         match self.project() {
-            BaseRouterResponseBodyProj::Api(b) => b.poll_data(cx),
-            BaseRouterResponseBodyProj::App(b) => b.poll_data(cx),
-            BaseRouterResponseBodyProj::Assets(b) => b.poll_data(cx),
-            BaseRouterResponseBodyProj::Other(b) => b.poll_data(cx),
+            BaseRouterResponseBodyProj::Api(b) => b.poll_data(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::App(b) => b.poll_data(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::Assets(b) => b.poll_data(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::Other(b) => b.poll_data(cx).map_err(Into::into),
         }
     }
 
     fn poll_trailers(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<Result<Option<http::HeaderMap>, Self::Error>> {
         match self.project() {
-            BaseRouterResponseBodyProj::Api(b) => b.poll_trailers(cx),
-            BaseRouterResponseBodyProj::App(b) => b.poll_trailers(cx),
-            BaseRouterResponseBodyProj::Assets(b) => b.poll_trailers(cx),
-            BaseRouterResponseBodyProj::Other(b) => b.poll_trailers(cx),
+            BaseRouterResponseBodyProj::Api(b) => b.poll_trailers(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::App(b) => b.poll_trailers(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::Assets(b) => b.poll_trailers(cx).map_err(Into::into),
+            BaseRouterResponseBodyProj::Other(b) => b.poll_trailers(cx).map_err(Into::into),
         }
     }
 }
@@ -158,7 +199,7 @@ where
     type Error = io::Error;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if let Poll::Ready(poll) = self.api.poll_ready(cx) {
             if let Err(e) = poll {
                 return Poll::Ready(Err(e));

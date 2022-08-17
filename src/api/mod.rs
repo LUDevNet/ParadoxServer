@@ -2,15 +2,20 @@ use std::{
     borrow::Borrow,
     convert::Infallible,
     error::Error,
+    future::Ready,
+    io,
     path::Path,
     str::{FromStr, Utf8Error},
     sync::Arc,
+    task::{self, Poll},
 };
 
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::LocaleNode;
+use http::Request;
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
+use tower::Service;
 use warp::{
     filters::BoxedFilter,
     path::Tail,
@@ -205,5 +210,28 @@ impl<'a> ApiFactory<'a> {
         let catch_all = make_api_catch_all();
 
         v0.or(v1).unify().or(catch_all).unify().boxed()
+    }
+}
+
+#[derive(Clone)]
+pub struct ApiService {}
+
+impl ApiService {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl<ReqBody> Service<Request<ReqBody>> for ApiService {
+    type Error = io::Error;
+    type Response = http::Response<hyper::Body>;
+    type Future = Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _req: Request<ReqBody>) -> Self::Future {
+        std::future::ready(Ok(http::Response::new(hyper::Body::from("{}".to_string()))))
     }
 }

@@ -1,47 +1,34 @@
 use std::{
-    convert::Infallible,
     fs::File,
     io,
-    iter::once,
     net::SocketAddr,
     path::Path,
     str::FromStr,
     sync::{Arc, RwLock},
 };
 
-use api::ApiFactory;
+use api::{ApiFactory, ApiService};
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
-use auth::{AuthImpl, Authorize};
+use auth::Authorize;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-use http::{
-    header::{HeaderName, AUTHORIZATION, CONTENT_TYPE},
-    Request, Response,
-};
+use http::{Request, Response};
 use http_body::combinators::UnsyncBoxBody;
 use hyper::{
     body::{Bytes, HttpBody},
     server::Server,
-    service::make_service_fn,
-    Body, Error,
 };
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
 use services::BaseRouter;
-use template::make_spa_dynamic;
 use tokio::runtime::Handle;
-use tower::{make::Shared, service_fn, Service, ServiceBuilder, ServiceExt};
-use tower_http::auth::RequireAuthorization;
+use tower::{make::Shared, ServiceBuilder};
+use tower_http::{auth::RequireAuthorization, services::ServeDir};
 use tracing::log::LevelFilter;
-use warp::{
-    filters::{header, BoxedFilter},
-    hyper::Uri,
-    path::FullPath,
-    query, Filter, Reply,
-};
+use warp::{hyper::Uri, path::FullPath, Filter, Reply};
 
 mod api;
 mod auth;
@@ -61,24 +48,6 @@ use crate::{
     redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
-
-async fn handler_api(
-    _request: Request<hyper::body::Body>,
-) -> Result<Response<hyper::body::Body>, io::Error> {
-    Ok(Response::new(hyper::body::Body::from("Hello API!")))
-}
-
-async fn handler_app(
-    _request: Request<hyper::body::Body>,
-) -> Result<Response<hyper::body::Body>, io::Error> {
-    Ok(Response::new(hyper::body::Body::from("Hello App!")))
-}
-
-async fn handler_assets(
-    _request: Request<hyper::body::Body>,
-) -> Result<Response<hyper::body::Body>, io::Error> {
-    Ok(Response::new(hyper::body::Body::from("Hello Assets!")))
-}
 
 fn new_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, error)
@@ -215,13 +184,13 @@ async fn main() -> color_eyre::Result<()> {
             .or(api_routes)
             .with(warp::compression::gzip()),
     );
+    let api = ApiService::new();
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
 
     // Create handlebars registry
     let hb = Arc::new(RwLock::new(template::Template::new()));
-
     load_meta_template(&hb, &spa_index)?;
 
     // Setup the watcher
@@ -231,33 +200,26 @@ async fn main() -> color_eyre::Result<()> {
     watcher.watch(&spa_index, RecursiveMode::Recursive).unwrap();
 
     let rt = Handle::current();
-
     rt.spawn(TemplateUpdateTask::new(rx, hb.clone()));
 
-    let loc = LocaleRoot::new(lr);
-    let spa_dynamic = make_spa_dynamic(tydb, loc, res, hb, &cfg.general.domain);
-
-    let spa = warp::fs::dir(spa_path.clone()).or(spa_dynamic);
+    // Set up the application
+    let spa = ServeDir::new(spa_path).fallback(template::SpaDynamic::new(
+        tydb,
+        LocaleRoot::new(lr),
+        res,
+        hb,
+        &cfg.general.domain,
+    ));
 
     // Initialize the lu-res cache
-    let res = warp::path("lu-res")
-        .and(warp::fs::dir(cfg.data.lu_res_cache.clone()))
-        .boxed();
+    let res = ServeDir::new(&cfg.data.lu_res_cache);
+
+    //let api_service = service_fn(handler_api);
 
     // Finally collect all routes
-    let routes = res.or(api).or(spa);
-
-    let auth = Authorize::new(&cfg.auth);
-
-    let api_service = service_fn(handler_api);
-    let app_service = service_fn(handler_app);
-    let assets_service = service_fn(handler_assets);
-
-    let routes = BaseRouter::new(api_service, app_service, assets_service);
-    let service = RequireAuthorization::custom(routes, auth);
-    let routes = services::PublicOr::new(service, &cfg.data.public);
-
-    //let routes = public.or(auth).or(routes);
+    let routes = BaseRouter::new(api, spa, res);
+    let protected = RequireAuthorization::custom(routes, Authorize::new(&cfg.auth));
+    let public = services::PublicOr::new(protected, &cfg.data.public);
 
     // FIXME: base filters
     //let mut root = base_filter(cfg.general.base.as_deref()).boxed();
@@ -314,7 +276,7 @@ async fn main() -> color_eyre::Result<()> {
     }*/
 
     //server.run((ip, cfg.general.port)).await;
-    let service = ServiceBuilder::new().service(routes);
+    let service = ServiceBuilder::new().service(public);
 
     // And run our service using `hyper`
     let addr = SocketAddr::from((ip, cfg.general.port));
