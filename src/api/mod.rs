@@ -23,7 +23,6 @@ use serde::Serialize;
 use tower::Service;
 use warp::{
     filters::BoxedFilter,
-    path::Tail,
     reply::{Json, WithStatus},
     Filter, Reply,
 };
@@ -31,7 +30,6 @@ use warp::{
 use crate::{auth::AuthKind, data::locale::LocaleRoot};
 
 use self::{
-    adapter::{LocaleAll, LocalePod},
     files::make_crc_lookup_filter,
     rev::{make_api_rev, ReverseLookup},
 };
@@ -39,6 +37,7 @@ use self::{
 pub mod adapter;
 mod docs;
 mod files;
+mod locale;
 pub mod rev;
 pub mod tables;
 
@@ -111,47 +110,6 @@ fn tydb_filter<'db>(
     warp::any().map(move || db)
 }
 
-pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::Json> + Clone {
-    move |p: Tail| {
-        let path = p.as_str().trim_end_matches('/');
-        let mut node = lr.as_ref();
-        let mut all = false;
-        if !path.is_empty() {
-            let path = match path.strip_suffix("/$all") {
-                Some(prefix) => {
-                    all = true;
-                    prefix
-                }
-                None => path,
-            };
-
-            // Skip loop for root node
-            for seg in path.split('/') {
-                if let Some(new) = {
-                    if let Ok(num) = seg.parse::<u32>() {
-                        node.int_children.get(&num)
-                    } else {
-                        node.str_children.get(seg)
-                    }
-                } {
-                    node = new;
-                } else {
-                    return None;
-                }
-            }
-        }
-        if all {
-            Some(warp::reply::json(&LocaleAll::new(node)))
-        } else {
-            Some(warp::reply::json(&LocalePod {
-                value: node.value.as_deref(),
-                int_keys: node.int_children.keys().cloned().collect(),
-                str_keys: node.str_children.keys().map(|s| s.as_ref()).collect(),
-            }))
-        }
-    }
-}
-
 pub(crate) struct ApiFactory<'a> {
     pub url: String,
     pub auth_kind: AuthKind,
@@ -167,24 +125,11 @@ impl<'a> ApiFactory<'a> {
         let loc = LocaleRoot::new(self.lr.clone());
 
         let v0_base = warp::path("v0");
-        let v0_locale = warp::path("locale")
-            .and(warp::path::tail())
-            .map(locale_api(self.lr))
-            .map(map_opt);
-
         let v0_crc = warp::path("crc").and(make_crc_lookup_filter(self.res_path, self.pki_path));
 
         let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
         let v0_openapi = docs::openapi(self.url, self.auth_kind).unwrap();
-        let v0 = v0_base.and(
-            v0_crc
-                .or(v0_locale)
-                .unify()
-                .or(v0_rev)
-                .unify()
-                .or(v0_openapi)
-                .unify(),
-        );
+        let v0 = v0_base.and(v0_crc.or(v0_rev).unify().or(v0_openapi).unify());
 
         // catch all
         let catch_all = make_api_catch_all();
@@ -193,39 +138,41 @@ impl<'a> ApiFactory<'a> {
     }
 }
 
-enum ApiRoute {
+enum ApiRoute<'r> {
     Tables,
-    TableByName(String),
-    AllTableRows(String),
-    TableRowsByPK(String, String),
+    TableByName(&'r str),
+    AllTableRows(&'r str),
+    TableRowsByPK(&'r str, &'r str),
+    Locale(Split<'r, char>),
 }
 
-impl ApiRoute {
-    fn v0(mut parts: Split<'_, char>) -> Result<Self, ()> {
+impl<'r> ApiRoute<'r> {
+    fn v0(mut parts: Split<'r, char>) -> Result<Self, ()> {
         match parts.next() {
             Some("tables") => match parts.next() {
                 None => Ok(Self::Tables),
                 Some(name) => match parts.next() {
-                    None => Ok(Self::TableByName(name.to_string())),
+                    None => Ok(Self::TableByName(name)),
                     Some("def") => match parts.next() {
-                        None => Ok(Self::TableByName(name.to_string())),
+                        None => Ok(Self::TableByName(name)),
                         _ => Err(()),
                     },
                     Some("all") => match parts.next() {
-                        None => Ok(Self::AllTableRows(name.to_string())),
+                        None => Ok(Self::AllTableRows(name)),
                         _ => Err(()),
                     },
                     Some(key) => match parts.next() {
-                        None => Ok(Self::TableRowsByPK(name.to_string(), key.to_string())),
+                        None => Ok(Self::TableRowsByPK(name, key)),
                         _ => Err(()),
                     },
                 },
             },
+            Some("locale") => Ok(Self::Locale(parts)),
             _ => Err(()),
         }
     }
 
-    fn v1(mut parts: Split<'_, char>) -> Result<Self, ()> {
+    fn v1(mut parts: Split<'r, char>) -> Result<Self, ()> {
         match parts.next() {
             Some("tables") => match parts.next() {
                 None => Ok(Self::Tables),
@@ -234,14 +181,9 @@ impl ApiRoute {
             _ => Err(()),
         }
     }
-}
 
-impl FromStr for ApiRoute {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let path = s.strip_prefix('/').unwrap_or(s);
-        let mut parts = path.split('/');
+    fn from_str(s: &'r str) -> Result<Self, ()> {
+        let mut parts = s.trim_start_matches('/').split('/');
         match parts.next() {
             Some("v0") => Self::v0(parts),
             Some("v1") => Self::v1(parts),
@@ -253,6 +195,7 @@ impl FromStr for ApiRoute {
 #[derive(Clone)]
 pub struct ApiService {
     pub db: Database<'static>,
+    pub locale_root: Arc<LocaleNode>,
 }
 
 fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
@@ -263,8 +206,8 @@ fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -
 const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
 
 impl ApiService {
-    pub fn new(db: Database<'static>) -> Self {
-        Self { db }
+    pub fn new(db: Database<'static>, locale_root: Arc<LocaleNode>) -> Self {
+        Self { db, locale_root }
     }
 
     fn reply_json_string(body: String) -> http::Response<hyper::Body> {
@@ -281,6 +224,11 @@ impl ApiService {
         r
     }
 
+    fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+        let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
+        Ok(Self::reply_json_string(body))
+    }
+
     fn reply_404() -> http::Response<hyper::Body> {
         let mut r = Response::new(hyper::Body::from("404"));
         *r.status_mut() = http::StatusCode::NOT_FOUND;
@@ -295,9 +243,17 @@ impl ApiService {
         &self,
         f: impl FnOnce(Database<'static>) -> Result<T, CastError>,
     ) -> Result<Response<hyper::Body>, io::Error> {
-        let list = f(self.db).map_err(into_other_io_error)?;
-        let body = serde_json::to_string(&list).map_err(into_other_io_error)?;
-        Ok(Self::reply_json_string(body))
+        let v = f(self.db).map_err(into_other_io_error)?;
+        Self::reply_json(&v)
+    }
+
+    /// Get data from `locale.xml`
+    fn locale(&self, rest: Split<char>) -> Result<Response<hyper::Body>, io::Error> {
+        match locale::select_node(self.locale_root.as_ref(), rest) {
+            Some((node, locale::Mode::All)) => Self::reply_json(&locale::All::new(node)),
+            Some((node, locale::Mode::Pod)) => Self::reply_json(&locale::Pod::new(node)),
+            None => Ok(Self::reply_404()),
+        }
     }
 }
 
@@ -314,13 +270,14 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
     ///
     /// Here, we turn [ApiRoute]s into [http::Response]s
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let response = match req.uri().path().parse() {
+        let response = match ApiRoute::from_str(req.uri().path()) {
             Ok(ApiRoute::Tables) => self.db_api(tables::tables_json),
-            Ok(ApiRoute::TableByName(name)) => self.db_api(|db| tables::table_def_json(db, &name)),
-            Ok(ApiRoute::AllTableRows(name)) => self.db_api(|db| tables::table_all_json(db, &name)),
+            Ok(ApiRoute::TableByName(name)) => self.db_api(|db| tables::table_def_json(db, name)),
+            Ok(ApiRoute::AllTableRows(name)) => self.db_api(|db| tables::table_all_json(db, name)),
             Ok(ApiRoute::TableRowsByPK(name, key)) => {
-                self.db_api(|db| tables::table_key_json(db, &name, key))
+                self.db_api(|db| tables::table_key_json(db, name, key))
             }
+            Ok(ApiRoute::Locale(rest)) => self.locale(rest),
             Err(()) => Ok(Self::reply_404()),
         };
         std::future::ready(response)

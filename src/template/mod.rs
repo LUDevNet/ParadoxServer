@@ -276,7 +276,7 @@ pub enum SpaRoute {
 
 impl SpaRoute {
     fn parse(path: &str) -> Option<Self> {
-        let mut split = path.strip_prefix('/').unwrap_or(path).split('/');
+        let mut split = path.trim_start_matches('/').split('/');
         match split.next() {
             Some("dashboard") => Some(Self::Dashboard),
             Some("objects") => match split.next() {

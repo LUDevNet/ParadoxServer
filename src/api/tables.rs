@@ -120,10 +120,10 @@ impl<'a> Iterator for FilteredRowIter<'a> {
     }
 }
 
-pub(super) fn table_key_json<'a>(
+pub(super) fn table_key_json<'a, K: Into<String>>(
     db: Database<'a>,
     name: &str,
-    key: String,
+    key: K,
 ) -> Result<Option<impl Serialize + 'a>, CastError> {
     let tables = db.tables()?;
     let table = match tables.by_name(name) {
