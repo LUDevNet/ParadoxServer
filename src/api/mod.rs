@@ -27,15 +27,16 @@ use warp::{
     Filter, Reply,
 };
 
-use crate::{auth::AuthKind, data::locale::LocaleRoot};
+use crate::data::locale::LocaleRoot;
 
 use self::{
+    docs::OpenApiService,
     files::make_crc_lookup_filter,
     rev::{make_api_rev, ReverseLookup},
 };
 
 pub mod adapter;
-mod docs;
+pub mod docs;
 mod files;
 mod locale;
 pub mod rev;
@@ -111,8 +112,6 @@ fn tydb_filter<'db>(
 }
 
 pub(crate) struct ApiFactory<'a> {
-    pub url: String,
-    pub auth_kind: AuthKind,
     pub tydb: &'static TypedDatabase<'static>,
     pub rev: &'static ReverseLookup,
     pub lr: Arc<LocaleNode>,
@@ -128,8 +127,7 @@ impl<'a> ApiFactory<'a> {
         let v0_crc = warp::path("crc").and(make_crc_lookup_filter(self.res_path, self.pki_path));
 
         let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
-        let v0_openapi = docs::openapi(self.url, self.auth_kind).unwrap();
-        let v0 = v0_base.and(v0_crc.or(v0_rev).unify().or(v0_openapi).unify());
+        let v0 = v0_base.and(v0_crc.or(v0_rev).unify());
 
         // catch all
         let catch_all = make_api_catch_all();
@@ -144,6 +142,7 @@ enum ApiRoute<'r> {
     AllTableRows(&'r str),
     TableRowsByPK(&'r str, &'r str),
     Locale(Split<'r, char>),
+    OpenApiV0,
 }
 
 impl<'r> ApiRoute<'r> {
@@ -168,6 +167,10 @@ impl<'r> ApiRoute<'r> {
                 },
             },
             Some("locale") => Ok(Self::Locale(parts)),
+            Some("openapi.json") => match parts.next() {
+                None => Ok(Self::OpenApiV0),
+                _ => Err(()),
+            },
             _ => Err(()),
         }
     }
@@ -196,6 +199,7 @@ impl<'r> ApiRoute<'r> {
 pub struct ApiService {
     pub db: Database<'static>,
     pub locale_root: Arc<LocaleNode>,
+    pub openapi: OpenApiService,
 }
 
 fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
@@ -206,8 +210,16 @@ fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -
 const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
 
 impl ApiService {
-    pub fn new(db: Database<'static>, locale_root: Arc<LocaleNode>) -> Self {
-        Self { db, locale_root }
+    pub fn new(
+        db: Database<'static>,
+        locale_root: Arc<LocaleNode>,
+        openapi: OpenApiService,
+    ) -> Self {
+        Self {
+            db,
+            locale_root,
+            openapi,
+        }
     }
 
     fn reply_json_string(body: String) -> http::Response<hyper::Body> {
@@ -278,6 +290,7 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
                 self.db_api(|db| tables::table_key_json(db, name, key))
             }
             Ok(ApiRoute::Locale(rest)) => self.locale(rest),
+            Ok(ApiRoute::OpenApiV0) => Self::reply_json(self.openapi.as_ref()),
             Err(()) => Ok(Self::reply_404()),
         };
         std::future::ready(response)

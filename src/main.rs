@@ -166,9 +166,8 @@ async fn main() -> color_eyre::Result<()> {
         })
         .boxed();
 
+    let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
     let api_routes = ApiFactory {
-        url: api_url,
-        auth_kind,
         tydb,
         rev,
         lr: lr.clone(),
@@ -183,7 +182,7 @@ async fn main() -> color_eyre::Result<()> {
             .or(api_routes)
             .with(warp::compression::gzip()),
     );
-    let api = ApiService::new(db, lr.clone());
+    let api = ApiService::new(db, lr.clone(), openapi);
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
