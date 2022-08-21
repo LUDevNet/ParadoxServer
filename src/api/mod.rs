@@ -5,16 +5,21 @@ use std::{
     future::Ready,
     io,
     path::Path,
-    str::{FromStr, Utf8Error},
+    str::{FromStr, Split, Utf8Error},
     sync::Arc,
     task::{self, Poll},
 };
 
+use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::LocaleNode;
-use http::Request;
+use http::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    HeaderValue, Request, Response,
+};
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
+use serde::Serialize;
 use tower::Service;
 use warp::{
     filters::BoxedFilter,
@@ -29,7 +34,6 @@ use self::{
     adapter::{LocaleAll, LocalePod},
     files::make_crc_lookup_filter,
     rev::{make_api_rev, ReverseLookup},
-    tables::{make_api_tables, tables_api},
 };
 
 pub mod adapter;
@@ -101,16 +105,6 @@ fn make_api_catch_all() -> impl Filter<Extract = (WithStatus<Json>,), Error = In
     warp::any().map(|| warp::reply::json(&404)).map(wrap_404)
 }
 
-/*fn copy_filter<'x, T>(v: T) -> impl Filter<Extract = (T,), Error=Infallible> + Clone + 'x where T: Send + Sync + Copy + 'x {
-    warp::any().map(move || v)
-}*/
-
-fn db_filter<'db>(
-    db: Database<'db>,
-) -> impl Filter<Extract = (Database,), Error = Infallible> + Clone + 'db {
-    warp::any().map(move || db)
-}
-
 fn tydb_filter<'db>(
     db: &'db TypedDatabase<'db>,
 ) -> impl Filter<Extract = (&'db TypedDatabase<'db>,), Error = Infallible> + Clone + 'db {
@@ -161,7 +155,6 @@ pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::J
 pub(crate) struct ApiFactory<'a> {
     pub url: String,
     pub auth_kind: AuthKind,
-    pub db: Database<'static>,
     pub tydb: &'static TypedDatabase<'static>,
     pub rev: &'static ReverseLookup,
     pub lr: Arc<LocaleNode>,
@@ -174,7 +167,6 @@ impl<'a> ApiFactory<'a> {
         let loc = LocaleRoot::new(self.lr.clone());
 
         let v0_base = warp::path("v0");
-        let v0_tables = warp::path("tables").and(make_api_tables(self.db));
         let v0_locale = warp::path("locale")
             .and(warp::path::tail())
             .map(locale_api(self.lr))
@@ -185,9 +177,7 @@ impl<'a> ApiFactory<'a> {
         let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
         let v0_openapi = docs::openapi(self.url, self.auth_kind).unwrap();
         let v0 = v0_base.and(
-            v0_tables
-                .or(v0_crc)
-                .unify()
+            v0_crc
                 .or(v0_locale)
                 .unify()
                 .or(v0_rev)
@@ -196,42 +186,143 @@ impl<'a> ApiFactory<'a> {
                 .unify(),
         );
 
-        // v1
-        let dbf = db_filter(self.db);
-        let v1_base = warp::path("v1");
-        let v1_tables_base = dbf.and(warp::path("tables"));
-        let v1_tables = v1_tables_base
-            .and(warp::path::end())
-            .map(tables_api)
-            .map(map_res);
-        let v1 = v1_base.and(v1_tables);
-
         // catch all
         let catch_all = make_api_catch_all();
 
-        v0.or(v1).unify().or(catch_all).unify().boxed()
+        v0.or(catch_all).unify().boxed()
+    }
+}
+
+enum ApiRoute {
+    Tables,
+    TableByName(String),
+    AllTableRows(String),
+    TableRowsByPK(String, String),
+}
+
+impl ApiRoute {
+    fn v0(mut parts: Split<'_, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some("tables") => match parts.next() {
+                None => Ok(Self::Tables),
+                Some(name) => match parts.next() {
+                    None => Ok(Self::TableByName(name.to_string())),
+                    Some("def") => match parts.next() {
+                        None => Ok(Self::TableByName(name.to_string())),
+                        _ => Err(()),
+                    },
+                    Some("all") => match parts.next() {
+                        None => Ok(Self::AllTableRows(name.to_string())),
+                        _ => Err(()),
+                    },
+                    Some(key) => match parts.next() {
+                        None => Ok(Self::TableRowsByPK(name.to_string(), key.to_string())),
+                        _ => Err(()),
+                    },
+                },
+            },
+            _ => Err(()),
+        }
+    }
+
+    fn v1(mut parts: Split<'_, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some("tables") => match parts.next() {
+                None => Ok(Self::Tables),
+                _ => Err(()),
+            },
+            _ => Err(()),
+        }
+    }
+}
+
+impl FromStr for ApiRoute {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let path = s.strip_prefix('/').unwrap_or(s);
+        let mut parts = path.split('/');
+        match parts.next() {
+            Some("v0") => Self::v0(parts),
+            Some("v1") => Self::v1(parts),
+            _ => Err(()),
+        }
     }
 }
 
 #[derive(Clone)]
-pub struct ApiService {}
+pub struct ApiService {
+    pub db: Database<'static>,
+}
+
+fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, error)
+}
+
+#[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
+const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
 
 impl ApiService {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(db: Database<'static>) -> Self {
+        Self { db }
+    }
+
+    fn reply_json_string(body: String) -> http::Response<hyper::Body> {
+        let is_404 = body == "null";
+        let content_length = HeaderValue::from(body.len());
+        let mut r = Response::new(hyper::Body::from(body));
+
+        if is_404 {
+            // FIXME: hack; handle T = Option<U> for 404 properly
+            *r.status_mut() = http::StatusCode::NOT_FOUND;
+        }
+        r.headers_mut().append(CONTENT_LENGTH, content_length);
+        r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
+        r
+    }
+
+    fn reply_404() -> http::Response<hyper::Body> {
+        let mut r = Response::new(hyper::Body::from("404"));
+        *r.status_mut() = http::StatusCode::NOT_FOUND;
+
+        let content_length = HeaderValue::from(3);
+        r.headers_mut().append(CONTENT_LENGTH, content_length);
+        r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
+        r
+    }
+
+    fn db_api<T: Serialize>(
+        &self,
+        f: impl FnOnce(Database<'static>) -> Result<T, CastError>,
+    ) -> Result<Response<hyper::Body>, io::Error> {
+        let list = f(self.db).map_err(into_other_io_error)?;
+        let body = serde_json::to_string(&list).map_err(into_other_io_error)?;
+        Ok(Self::reply_json_string(body))
     }
 }
 
 impl<ReqBody> Service<Request<ReqBody>> for ApiService {
     type Error = io::Error;
-    type Response = http::Response<hyper::Body>;
+    type Response = Response<hyper::Body>;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, _req: Request<ReqBody>) -> Self::Future {
-        std::future::ready(Ok(http::Response::new(hyper::Body::from("{}".to_string()))))
+    /// This is the main entry point to the API service.
+    ///
+    /// Here, we turn [ApiRoute]s into [http::Response]s
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let response = match req.uri().path().parse() {
+            Ok(ApiRoute::Tables) => self.db_api(tables::tables_json),
+            Ok(ApiRoute::TableByName(name)) => self.db_api(|db| tables::table_def_json(db, &name)),
+            Ok(ApiRoute::AllTableRows(name)) => self.db_api(|db| tables::table_all_json(db, &name)),
+            Ok(ApiRoute::TableRowsByPK(name, key)) => {
+                self.db_api(|db| tables::table_key_json(db, &name, key))
+            }
+            Err(()) => Ok(Self::reply_404()),
+        };
+        std::future::ready(response)
     }
 }

@@ -14,7 +14,7 @@ use auth::Authorize;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-use http::{Request, Response};
+use http::Response;
 use http_body::combinators::UnsyncBoxBody;
 use hyper::{
     body::{Bytes, HttpBody},
@@ -169,7 +169,6 @@ async fn main() -> color_eyre::Result<()> {
     let api_routes = ApiFactory {
         url: api_url,
         auth_kind,
-        db,
         tydb,
         rev,
         lr: lr.clone(),
@@ -184,7 +183,7 @@ async fn main() -> color_eyre::Result<()> {
             .or(api_routes)
             .with(warp::compression::gzip()),
     );
-    let api = ApiService::new();
+    let api = ApiService::new(db);
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
@@ -203,13 +202,15 @@ async fn main() -> color_eyre::Result<()> {
     rt.spawn(TemplateUpdateTask::new(rx, hb.clone()));
 
     // Set up the application
-    let spa = ServeDir::new(spa_path).fallback(template::SpaDynamic::new(
-        tydb,
-        LocaleRoot::new(lr),
-        res,
-        hb,
-        &cfg.general.domain,
-    ));
+    let spa = ServeDir::new(spa_path)
+        .append_index_html_on_directories(false)
+        .fallback(template::SpaDynamic::new(
+            tydb,
+            LocaleRoot::new(lr),
+            res,
+            hb,
+            &cfg.general.domain,
+        ));
 
     // Initialize the lu-res cache
     let res = ServeDir::new(&cfg.data.lu_res_cache);
