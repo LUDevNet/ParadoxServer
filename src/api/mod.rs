@@ -246,6 +246,10 @@ fn reply<T: Serialize>(accept: Accept, v: &T) -> Result<http::Response<hyper::Bo
     }
 }
 
+fn reply_opt_json<T: Serialize>(v: Option<&T>) -> Result<http::Response<hyper::Body>, io::Error> {
+    v.map(reply_json).unwrap_or_else(|| Ok(reply_404()))
+}
+
 fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
     let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
     Ok(reply_string(body, APPLICATION_JSON))

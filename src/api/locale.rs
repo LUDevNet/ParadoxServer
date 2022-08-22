@@ -1,27 +1,12 @@
-use std::{collections::BTreeMap, fmt, str};
+use std::{fmt, str};
 
 use assembly_xml::localization::LocaleNode;
 use serde::{
-    ser::{SerializeMap, SerializeSeq, SerializeStruct},
+    ser::{SerializeMap, SerializeStruct},
     Serialize,
 };
 
-struct BTreeMapKeysAdapter<'a, K, V> {
-    inner: &'a BTreeMap<K, V>,
-}
-
-impl<'a, K: Serialize, V> Serialize for BTreeMapKeysAdapter<'a, K, V> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut s = serializer.serialize_seq(Some(self.inner.len()))?;
-        for key in self.inner.keys() {
-            s.serialize_element(key)?;
-        }
-        s.end()
-    }
-}
+use super::adapter::BTreeMapKeysAdapter;
 
 #[derive(Debug)]
 pub(super) struct Pod<'a> {
@@ -43,15 +28,11 @@ impl<'a> Serialize for Pod<'a> {
         m.serialize_field("value", &self.inner.value)?;
         m.serialize_field(
             "int_keys",
-            &BTreeMapKeysAdapter {
-                inner: &self.inner.int_children,
-            },
+            &BTreeMapKeysAdapter::new(&self.inner.int_children),
         )?;
         m.serialize_field(
             "str_keys",
-            &BTreeMapKeysAdapter {
-                inner: &self.inner.str_children,
-            },
+            &BTreeMapKeysAdapter::new(&self.inner.str_children),
         )?;
         m.end()
     }

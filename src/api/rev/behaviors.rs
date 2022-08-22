@@ -1,4 +1,3 @@
-use assembly_core::buffer::CastError;
 use paradox_typed_db::{
     columns::BehaviorTemplateColumn,
     rows::BehaviorTemplateRow,
@@ -8,15 +7,9 @@ use paradox_typed_db::{
 use serde::ser::SerializeMap;
 use serde::Serialize;
 
-use crate::api::map_res;
-use std::{collections::BTreeSet, convert::Infallible};
+use std::collections::BTreeSet;
 
-use super::{Api, Ext, Rev};
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
+use super::{data::BehaviorKeyIndex, Api, ReverseLookup};
 
 #[derive(Clone)]
 pub(crate) struct BehaviorParameters<'a, 'b> {
@@ -45,8 +38,8 @@ pub(crate) struct Behavior<'a, 'b> {
     parameters: BehaviorParameters<'a, 'b>,
 }
 
-struct EmbeddedBehaviors<'a, 'b> {
-    keys: &'b BTreeSet<i32>,
+pub(super) struct EmbeddedBehaviors<'a, 'b> {
+    keys: BTreeSet<i32>,
     table_templates: &'b BehaviorTemplateTable<'a>,
     table_parameters: &'b BehaviorParameterTable<'a>,
 }
@@ -61,7 +54,7 @@ impl Serialize for EmbeddedBehaviors<'_, '_> {
             .table_templates
             .get_col(BehaviorTemplateColumn::BehaviorId)
             .unwrap();
-        for &behavior_id in self.keys {
+        for &behavior_id in &self.keys {
             m.serialize_key(&behavior_id)?;
             let b = Behavior {
                 template: BehaviorTemplateRow::get(
@@ -81,31 +74,17 @@ impl Serialize for EmbeddedBehaviors<'_, '_> {
     }
 }
 
-fn rev_behavior_api(db: &TypedDatabase, rev: Rev, behavior_id: i32) -> Result<Json, CastError> {
-    let data = rev.inner.behaviors.get(&behavior_id);
-    let set = rev.inner.get_behavior_set(behavior_id);
-    let val = Api {
-        data,
+pub(super) fn lookup<'db, 'd, 'r>(
+    db: &'d TypedDatabase<'db>,
+    rev: &'r ReverseLookup,
+    behavior_id: i32,
+) -> Api<Option<&'r BehaviorKeyIndex>, EmbeddedBehaviors<'db, 'd>> {
+    Api {
+        data: rev.behaviors.get(&behavior_id),
         embedded: EmbeddedBehaviors {
-            keys: &set,
+            keys: rev.get_behavior_set(behavior_id),
             table_templates: &db.behavior_templates,
             table_parameters: &db.behavior_parameters,
         },
-    };
-    Ok(warp::reply::json(&val))
-}
-
-pub(super) fn behaviors_api<
-    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
->(
-    rev: &F,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let rev_behaviors = rev.clone().and(warp::path("behaviors"));
-    let rev_behavior_id_base = rev_behaviors.and(warp::path::param::<i32>());
-    let rev_behavior_id = rev_behavior_id_base
-        .and(warp::path::end())
-        .map(rev_behavior_api)
-        .map(map_res);
-
-    rev_behavior_id.boxed()
+    }
 }

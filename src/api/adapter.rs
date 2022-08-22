@@ -4,7 +4,10 @@ use std::slice::Iter;
 
 use assembly_xml::localization::LocaleNode;
 use paradox_typed_db::TypedRow;
-use serde::{ser::SerializeMap, Serialize};
+use serde::{
+    ser::{SerializeMap, SerializeSeq},
+    Serialize,
+};
 
 pub(crate) trait FindHash {
     fn find_hash(&self, v: i32) -> Option<i32>;
@@ -166,5 +169,28 @@ impl<'a> Serialize for LocaleTableAdapter<'a> {
             }
         }
         m.end()
+    }
+}
+
+pub(crate) struct BTreeMapKeysAdapter<'a, K, V> {
+    inner: &'a BTreeMap<K, V>,
+}
+
+impl<'a, K, V> BTreeMapKeysAdapter<'a, K, V> {
+    pub fn new(inner: &'a BTreeMap<K, V>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a, K: Serialize, V> Serialize for BTreeMapKeysAdapter<'a, K, V> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_seq(Some(self.inner.len()))?;
+        for key in self.inner.keys() {
+            s.serialize_element(key)?;
+        }
+        s.end()
     }
 }

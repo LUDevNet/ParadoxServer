@@ -3,7 +3,6 @@
 //! This module contains the reverse API of the server. These are, generally speaking,
 //! database lookups by some specific ID such as an "object template id" or a "skill id"
 //! and produce data from multiple tables.
-use assembly_core::buffer::CastError;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::{
@@ -21,7 +20,6 @@ use warp::{
 mod common;
 mod data;
 
-mod activity;
 mod behaviors;
 mod component_types;
 mod loot_table_index;
@@ -34,7 +32,7 @@ pub use data::ReverseLookup;
 
 use crate::data::locale::LocaleRoot;
 
-use super::{map_res, tydb_filter};
+use super::{adapter::BTreeMapKeysAdapter, tydb_filter};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -54,10 +52,6 @@ static REV_APIS: &[&str; 8] = &[
     "object_types",
     "skill_ids",
 ];
-
-fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
-    Ok(warp::reply::json(&REV_APIS))
-}
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct Rev<'a> {
@@ -80,8 +74,6 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_activity = activity::activity_api(&rev);
-    let rev_behaviors = behaviors::behaviors_api(&rev);
     let rev_component_types = component_types::component_types_api(&rev);
     let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
     let rev_mission_types = missions::mission_types_api(&rev, loc);
@@ -89,17 +81,7 @@ pub(super) fn make_api_rev(
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
 
-    let first = rev
-        .clone()
-        .and(warp::path::end())
-        .map(rev_api)
-        .map(map_res)
-        .boxed();
-    first
-        .or(rev_activity)
-        .unify()
-        .or(rev_skills)
-        .unify()
+    rev_skills
         .or(rev_mission_types)
         .unify()
         .or(rev_object_types)
@@ -108,8 +90,6 @@ pub(super) fn make_api_rev(
         .unify()
         .or(rev_component_types)
         .unify()
-        .or(rev_behaviors)
-        .unify()
         .or(rev_loot_table_index)
         .unify()
         .boxed()
@@ -117,11 +97,39 @@ pub(super) fn make_api_rev(
 
 pub(super) enum Route {
     Base,
+    ActivityById(i32),
+    BehaviorById(i32),
+    ComponentTypes,
 }
 
 impl Route {
     pub(super) fn from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
         match parts.next() {
+            Some("activity") => match parts.next() {
+                Some(key) => match parts.next() {
+                    None => match key.parse() {
+                        Ok(id) => Ok(Self::ActivityById(id)),
+                        Err(_) => Err(()),
+                    },
+                    _ => Err(()),
+                },
+                _ => Err(()),
+            },
+            Some("behaviors") => match parts.next() {
+                Some(key) => match key.parse() {
+                    Ok(id) => Ok(Self::BehaviorById(id)),
+                    Err(_) => Err(()),
+                },
+                _ => Err(()),
+            },
+            Some("component_types") => match parts.next() {
+                Some("") => match parts.next() {
+                    None => Ok(Self::ComponentTypes),
+                    _ => Err(()),
+                },
+                None => Ok(Self::ComponentTypes),
+                _ => Err(()),
+            },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
                 _ => Err(()),
@@ -161,6 +169,11 @@ impl Service<Route> for RevService {
     fn call(&mut self, req: Route) -> Self::Future {
         let r = match req {
             Route::Base => super::reply_json(&REV_APIS),
+            Route::ActivityById(id) => super::reply_opt_json(self.rev.activities.get(&id)),
+            Route::BehaviorById(id) => super::reply_json(&behaviors::lookup(self.db, self.rev, id)),
+            Route::ComponentTypes => {
+                super::reply_json(&BTreeMapKeysAdapter::new(&self.rev.component_use))
+            }
         };
         std::future::ready(r)
     }
