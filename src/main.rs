@@ -166,7 +166,7 @@ async fn main() -> color_eyre::Result<()> {
             .or(api_routes)
             .with(warp::compression::gzip()),
     );
-    let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri);
+    let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri, tydb, rev);
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");

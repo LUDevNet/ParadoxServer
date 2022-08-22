@@ -31,7 +31,7 @@ use crate::data::locale::LocaleRoot;
 use self::{
     docs::OpenApiService,
     files::PackService,
-    rev::{make_api_rev, ReverseLookup},
+    rev::{make_api_rev, RevService, ReverseLookup},
 };
 
 pub mod adapter;
@@ -137,6 +137,7 @@ enum ApiRoute<'r> {
     TableRowsByPK(&'r str, &'r str),
     Locale(Split<'r, char>),
     Crc(u32),
+    Rev(rev::Route),
     OpenApiV0,
     SwaggerUI,
     SwaggerUIRedirect,
@@ -164,6 +165,7 @@ impl<'r> ApiRoute<'r> {
                 },
             },
             Some("locale") => Ok(Self::Locale(parts)),
+            Some("rev") => rev::Route::from_parts(parts).map(ApiRoute::Rev),
             Some("crc") => match parts.next() {
                 Some(crc) => match crc.parse() {
                     Ok(crc) => Ok(Self::Crc(crc)),
@@ -211,6 +213,59 @@ enum Accept {
     Yaml,
 }
 
+fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, error)
+}
+
+fn reply_static(body: &'static str) -> http::Response<hyper::Body> {
+    let mut r = Response::new(hyper::Body::from(body));
+    r.headers_mut()
+        .append(CONTENT_LENGTH, HeaderValue::from(body.len()));
+    r.headers_mut().append(CONTENT_TYPE, TEXT_HTML);
+    r
+}
+
+fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
+    let is_404 = body == "null";
+    let content_length = HeaderValue::from(body.len());
+    let mut r = Response::new(hyper::Body::from(body));
+
+    if is_404 {
+        // FIXME: hack; handle T = Option<U> for 404 properly
+        *r.status_mut() = http::StatusCode::NOT_FOUND;
+    }
+    r.headers_mut().append(CONTENT_LENGTH, content_length);
+    r.headers_mut().append(CONTENT_TYPE, content_type);
+    r
+}
+
+fn reply<T: Serialize>(accept: Accept, v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    match accept {
+        Accept::Json => reply_json(v),
+        Accept::Yaml => reply_yaml(v),
+    }
+}
+
+fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
+    Ok(reply_string(body, APPLICATION_JSON))
+}
+
+fn reply_yaml<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    let body = serde_yaml::to_string(&v).map_err(into_other_io_error)?;
+    Ok(reply_string(body, APPLICATION_YAML))
+}
+
+fn reply_404() -> http::Response<hyper::Body> {
+    let mut r = Response::new(hyper::Body::from("404"));
+    *r.status_mut() = http::StatusCode::NOT_FOUND;
+
+    let content_length = HeaderValue::from(3);
+    r.headers_mut().append(CONTENT_LENGTH, content_length);
+    r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
+    r
+}
+
 #[derive(Clone)]
 pub struct ApiService {
     pub db: Database<'static>,
@@ -218,10 +273,7 @@ pub struct ApiService {
     pub openapi: OpenApiService,
     pack: files::PackService,
     api_url: HeaderValue,
-}
-
-fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, error)
+    rev: rev::RevService,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
@@ -238,67 +290,18 @@ impl ApiService {
         pack: PackService,
         openapi: OpenApiService,
         api_uri: Uri,
+        tydb: &'static TypedDatabase,
+        rev: &'static ReverseLookup,
     ) -> Self {
         let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
         Self {
             pack,
             db,
-            locale_root,
+            locale_root: locale_root.clone(),
             openapi,
             api_url,
+            rev: RevService::new(tydb, LocaleRoot { root: locale_root }, rev),
         }
-    }
-
-    fn reply_static(body: &'static str) -> http::Response<hyper::Body> {
-        let mut r = Response::new(hyper::Body::from(body));
-        r.headers_mut()
-            .append(CONTENT_LENGTH, HeaderValue::from(body.len()));
-        r.headers_mut().append(CONTENT_TYPE, TEXT_HTML);
-        r
-    }
-
-    fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
-        let is_404 = body == "null";
-        let content_length = HeaderValue::from(body.len());
-        let mut r = Response::new(hyper::Body::from(body));
-
-        if is_404 {
-            // FIXME: hack; handle T = Option<U> for 404 properly
-            *r.status_mut() = http::StatusCode::NOT_FOUND;
-        }
-        r.headers_mut().append(CONTENT_LENGTH, content_length);
-        r.headers_mut().append(CONTENT_TYPE, content_type);
-        r
-    }
-
-    fn reply<T: Serialize>(
-        accept: Accept,
-        v: &T,
-    ) -> Result<http::Response<hyper::Body>, io::Error> {
-        match accept {
-            Accept::Json => Self::reply_json(v),
-            Accept::Yaml => Self::reply_yaml(v),
-        }
-    }
-
-    fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
-        let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
-        Ok(Self::reply_string(body, APPLICATION_JSON))
-    }
-
-    fn reply_yaml<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
-        let body = serde_yaml::to_string(&v).map_err(into_other_io_error)?;
-        Ok(Self::reply_string(body, APPLICATION_YAML))
-    }
-
-    fn reply_404() -> http::Response<hyper::Body> {
-        let mut r = Response::new(hyper::Body::from("404"));
-        *r.status_mut() = http::StatusCode::NOT_FOUND;
-
-        let content_length = HeaderValue::from(3);
-        r.headers_mut().append(CONTENT_LENGTH, content_length);
-        r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
-        r
     }
 
     fn db_api<T: Serialize>(
@@ -308,8 +311,8 @@ impl ApiService {
     ) -> Result<Response<hyper::Body>, io::Error> {
         let v = f(self.db).map_err(into_other_io_error)?;
         match accept {
-            Accept::Json => Self::reply_json(&v),
-            Accept::Yaml => Self::reply_yaml(&v),
+            Accept::Json => reply_json(&v),
+            Accept::Yaml => reply_yaml(&v),
         }
     }
 
@@ -320,9 +323,9 @@ impl ApiService {
         rest: Split<char>,
     ) -> Result<Response<hyper::Body>, io::Error> {
         match locale::select_node(self.locale_root.as_ref(), rest) {
-            Some((node, locale::Mode::All)) => Self::reply(accept, &locale::All::new(node)),
-            Some((node, locale::Mode::Pod)) => Self::reply(accept, &locale::Pod::new(node)),
-            None => Ok(Self::reply_404()),
+            Some((node, locale::Mode::All)) => reply(accept, &locale::All::new(node)),
+            Some((node, locale::Mode::Pod)) => reply(accept, &locale::Pod::new(node)),
+            None => Ok(reply_404()),
         }
     }
 
@@ -365,11 +368,12 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
                 self.db_api(accept, |db| tables::table_key_json(db, name, key))
             }
             Ok(ApiRoute::Locale(rest)) => self.locale(accept, rest),
-            Ok(ApiRoute::OpenApiV0) => Self::reply_json(self.openapi.as_ref()),
-            Ok(ApiRoute::SwaggerUI) => Ok(Self::reply_static(SWAGGER_UI_HTML)),
+            Ok(ApiRoute::OpenApiV0) => reply_json(self.openapi.as_ref()),
+            Ok(ApiRoute::SwaggerUI) => Ok(reply_static(SWAGGER_UI_HTML)),
             Ok(ApiRoute::SwaggerUIRedirect) => self.swagger_ui_redirect(),
-            Ok(ApiRoute::Crc(crc)) => Self::reply(accept, &self.pack.lookup(crc)),
-            Err(()) => Ok(Self::reply_404()),
+            Ok(ApiRoute::Crc(crc)) => reply(accept, &self.pack.lookup(crc)),
+            Ok(ApiRoute::Rev(route)) => return self.rev.call(route),
+            Err(()) => Ok(reply_404()),
         };
         std::future::ready(response)
     }

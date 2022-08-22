@@ -6,7 +6,12 @@
 use assembly_core::buffer::CastError;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
-use std::convert::Infallible;
+use std::{
+    convert::Infallible,
+    io, str,
+    task::{Context, Poll},
+};
+use tower::Service;
 use warp::{
     filters::BoxedFilter,
     reply::{Json, WithStatus},
@@ -39,17 +44,19 @@ pub struct Api<T, E> {
     embedded: E,
 }
 
+static REV_APIS: &[&str; 8] = &[
+    "activity",
+    "behaviors",
+    "component_types",
+    "loot_table_index",
+    "mission_types",
+    "objects",
+    "object_types",
+    "skill_ids",
+];
+
 fn rev_api(_db: &TypedDatabase, _rev: Rev) -> Result<Json, CastError> {
-    Ok(warp::reply::json(&[
-        "activity",
-        "behaviors",
-        "component_types",
-        "loot_table_index",
-        "mission_types",
-        "objects",
-        "object_types",
-        "skill_ids",
-    ]))
+    Ok(warp::reply::json(&REV_APIS))
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -106,4 +113,55 @@ pub(super) fn make_api_rev(
         .or(rev_loot_table_index)
         .unify()
         .boxed()
+}
+
+pub(super) enum Route {
+    Base,
+}
+
+impl Route {
+    pub(super) fn from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some("") => match parts.next() {
+                None => Ok(Self::Base),
+                _ => Err(()),
+            },
+            None => Ok(Self::Base),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RevService {
+    db: &'static TypedDatabase<'static>,
+    loc: LocaleRoot,
+    rev: &'static ReverseLookup,
+}
+
+impl RevService {
+    pub(crate) fn new(
+        db: &'static TypedDatabase<'static>,
+        loc: LocaleRoot,
+        rev: &'static ReverseLookup,
+    ) -> RevService {
+        Self { db, loc, rev }
+    }
+}
+
+impl Service<Route> for RevService {
+    type Response = http::Response<hyper::Body>;
+    type Error = io::Error;
+    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Route) -> Self::Future {
+        let r = match req {
+            Route::Base => super::reply_json(&REV_APIS),
+        };
+        std::future::ready(r)
+    }
 }
