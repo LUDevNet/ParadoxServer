@@ -105,10 +105,9 @@ async fn main() -> color_eyre::Result<()> {
     };
 
     let cfg_g = &cfg.general;
-    let canonical_base_url = if let Some(b) = cfg_g.base.as_deref() {
-        format!("{}://{}/{}", scheme, &cfg_g.domain, b)
-    } else {
-        format!("{}://{}", scheme, &cfg_g.domain)
+    let canonical_base_url = match cfg_g.base.as_deref() {
+        Some(b) => format!("{}://{}/{}", scheme, &cfg_g.domain, b),
+        None => format!("{}://{}", scheme, &cfg_g.domain),
     };
 
     let lu_res = cfg

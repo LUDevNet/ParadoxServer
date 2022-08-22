@@ -190,6 +190,9 @@ impl<'r> ApiRoute<'r> {
     }
 
     fn from_str(s: &'r str) -> Result<Self, ()> {
+        if s.is_empty() {
+            return Ok(Self::SwaggerUIRedirect);
+        }
         let mut parts = s.trim_start_matches('/').split('/');
         match parts.next() {
             Some("v0") => Self::v0(parts),
@@ -198,7 +201,6 @@ impl<'r> ApiRoute<'r> {
                 None => Ok(Self::SwaggerUI),
                 _ => Err(()),
             },
-            None => Ok(Self::SwaggerUIRedirect),
             _ => Err(()),
         }
     }
