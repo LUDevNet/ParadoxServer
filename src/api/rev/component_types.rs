@@ -11,19 +11,22 @@ use warp::{
 
 use super::{
     common::{ObjectTypeEmbedded, ObjectsRefAdapter},
+    data::{ComponentsUse, ReverseLookup},
     Api, Ext, Rev,
 };
-use crate::api::{map_opt_res, map_res};
+use crate::api::{adapter::BTreeMapKeysAdapter, map_opt_res};
 
 #[derive(Serialize)]
-struct Components {
-    components: Vec<i32>,
+pub(super) struct Components<'a> {
+    components: BTreeMapKeysAdapter<'a, i32, ComponentsUse>,
 }
 
-fn rev_component_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
-    let components: Vec<i32> = rev.inner.component_use.keys().copied().collect();
-    let val = Components { components };
-    Ok(warp::reply::json(&val))
+impl<'a> Components<'a> {
+    pub fn new(rev: &'a ReverseLookup) -> Self {
+        Self {
+            components: BTreeMapKeysAdapter::new(&rev.component_use),
+        }
+    }
 }
 
 fn rev_component_type_api(
@@ -83,17 +86,8 @@ pub(super) fn component_types_api<
         .map(map_opt_res)
         .boxed();
 
-    let rev_component_types_list = rev_component_types_base
-        .clone()
-        .and(warp::path::end())
-        .map(rev_component_types_api)
-        .map(map_res)
-        .boxed();
-
     rev_single_component_type
         .or(rev_component_type)
-        .unify()
-        .or(rev_component_types_list)
         .unify()
         .boxed()
 }

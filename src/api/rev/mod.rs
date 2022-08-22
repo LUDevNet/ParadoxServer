@@ -32,7 +32,7 @@ pub use data::ReverseLookup;
 
 use crate::data::locale::LocaleRoot;
 
-use super::{adapter::BTreeMapKeysAdapter, tydb_filter};
+use super::tydb_filter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -171,9 +171,7 @@ impl Service<Route> for RevService {
             Route::Base => super::reply_json(&REV_APIS),
             Route::ActivityById(id) => super::reply_opt_json(self.rev.activities.get(&id)),
             Route::BehaviorById(id) => super::reply_json(&behaviors::lookup(self.db, self.rev, id)),
-            Route::ComponentTypes => {
-                super::reply_json(&BTreeMapKeysAdapter::new(&self.rev.component_use))
-            }
+            Route::ComponentTypes => super::reply_json(&component_types::Components::new(self.rev)),
         };
         std::future::ready(r)
     }
