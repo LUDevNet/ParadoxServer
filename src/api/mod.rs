@@ -4,7 +4,6 @@ use std::{
     error::Error,
     future::Ready,
     io,
-    path::Path,
     str::{FromStr, Split, Utf8Error},
     sync::Arc,
     task::{self, Poll},
@@ -14,8 +13,8 @@ use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::LocaleNode;
 use http::{
-    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE},
-    HeaderValue, Request, Response,
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
+    HeaderValue, Request, Response, StatusCode, Uri,
 };
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
@@ -31,13 +30,13 @@ use crate::data::locale::LocaleRoot;
 
 use self::{
     docs::OpenApiService,
-    files::make_crc_lookup_filter,
+    files::PackService,
     rev::{make_api_rev, ReverseLookup},
 };
 
 pub mod adapter;
 pub mod docs;
-mod files;
+pub mod files;
 mod locale;
 pub mod rev;
 pub mod tables;
@@ -111,25 +110,20 @@ fn tydb_filter<'db>(
     warp::any().map(move || db)
 }
 
-pub(crate) struct ApiFactory<'a> {
+pub(crate) struct ApiFactory {
     pub tydb: &'static TypedDatabase<'static>,
     pub rev: &'static ReverseLookup,
     pub lr: Arc<LocaleNode>,
-    pub res_path: &'a Path,
-    pub pki_path: Option<&'a Path>,
 }
 
-impl<'a> ApiFactory<'a> {
+impl ApiFactory {
     pub(crate) fn make_api(self) -> BoxedFilter<(WithStatus<Json>,)> {
         let loc = LocaleRoot::new(self.lr.clone());
 
         let v0_base = warp::path("v0");
-        let v0_crc = warp::path("crc").and(make_crc_lookup_filter(self.res_path, self.pki_path));
 
         let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
-        let v0 = v0_base.and(v0_crc.or(v0_rev).unify());
-
-        // catch all
+        let v0 = v0_base.and(v0_rev);
         let catch_all = make_api_catch_all();
 
         v0.or(catch_all).unify().boxed()
@@ -142,7 +136,10 @@ enum ApiRoute<'r> {
     AllTableRows(&'r str),
     TableRowsByPK(&'r str, &'r str),
     Locale(Split<'r, char>),
+    Crc(u32),
     OpenApiV0,
+    SwaggerUI,
+    SwaggerUIRedirect,
 }
 
 impl<'r> ApiRoute<'r> {
@@ -167,6 +164,13 @@ impl<'r> ApiRoute<'r> {
                 },
             },
             Some("locale") => Ok(Self::Locale(parts)),
+            Some("crc") => match parts.next() {
+                Some(crc) => match crc.parse() {
+                    Ok(crc) => Ok(Self::Crc(crc)),
+                    _ => Err(()),
+                },
+                _ => Err(()),
+            },
             Some("openapi.json") => match parts.next() {
                 None => Ok(Self::OpenApiV0),
                 _ => Err(()),
@@ -190,6 +194,11 @@ impl<'r> ApiRoute<'r> {
         match parts.next() {
             Some("v0") => Self::v0(parts),
             Some("v1") => Self::v1(parts),
+            Some("") => match parts.next() {
+                None => Ok(Self::SwaggerUI),
+                _ => Err(()),
+            },
+            None => Ok(Self::SwaggerUIRedirect),
             _ => Err(()),
         }
     }
@@ -205,6 +214,8 @@ pub struct ApiService {
     pub db: Database<'static>,
     pub locale_root: Arc<LocaleNode>,
     pub openapi: OpenApiService,
+    pack: files::PackService,
+    api_url: HeaderValue,
 }
 
 fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
@@ -215,18 +226,33 @@ fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -
 const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
 #[allow(clippy::declare_interior_mutable_const)]
 const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml; charset=utf-8");
+#[allow(clippy::declare_interior_mutable_const)]
+const TEXT_HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
 
 impl ApiService {
-    pub fn new(
+    pub(crate) fn new(
         db: Database<'static>,
         locale_root: Arc<LocaleNode>,
+        pack: PackService,
         openapi: OpenApiService,
+        api_uri: Uri,
     ) -> Self {
+        let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
         Self {
+            pack,
             db,
             locale_root,
             openapi,
+            api_url,
         }
+    }
+
+    fn reply_static(body: &'static str) -> http::Response<hyper::Body> {
+        let mut r = Response::new(hyper::Body::from(body));
+        r.headers_mut()
+            .append(CONTENT_LENGTH, HeaderValue::from(body.len()));
+        r.headers_mut().append(CONTENT_TYPE, TEXT_HTML);
+        r
     }
 
     fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
@@ -297,7 +323,16 @@ impl ApiService {
             None => Ok(Self::reply_404()),
         }
     }
+
+    fn swagger_ui_redirect(&self) -> Result<http::Response<hyper::Body>, io::Error> {
+        let mut r = http::Response::new(hyper::Body::empty());
+        *r.status_mut() = StatusCode::PERMANENT_REDIRECT;
+        r.headers_mut().append(LOCATION, self.api_url.clone());
+        Ok(r)
+    }
 }
+
+const SWAGGER_UI_HTML: &str = include_str!("../../res/api.html");
 
 impl<ReqBody> Service<Request<ReqBody>> for ApiService {
     type Error = io::Error;
@@ -329,6 +364,9 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
             }
             Ok(ApiRoute::Locale(rest)) => self.locale(accept, rest),
             Ok(ApiRoute::OpenApiV0) => Self::reply_json(self.openapi.as_ref()),
+            Ok(ApiRoute::SwaggerUI) => Ok(Self::reply_static(SWAGGER_UI_HTML)),
+            Ok(ApiRoute::SwaggerUIRedirect) => self.swagger_ui_redirect(),
+            Ok(ApiRoute::Crc(crc)) => Self::reply(accept, &self.pack.lookup(crc)),
             Err(()) => Ok(Self::reply_404()),
         };
         std::future::ready(response)

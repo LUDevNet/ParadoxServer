@@ -28,7 +28,7 @@ use tokio::runtime::Handle;
 use tower::{make::Shared, ServiceBuilder};
 use tower_http::{auth::RequireAuthorization, services::ServeDir};
 use tracing::log::LevelFilter;
-use warp::{hyper::Uri, path::FullPath, Filter, Reply};
+use warp::{hyper::Uri, Filter};
 
 mod api;
 mod auth;
@@ -45,7 +45,6 @@ use crate::{
     config::AuthConfig,
     data::{fs::LuRes, locale::LocaleRoot},
     fallback::make_fallback,
-    redirect::{add_host_filters, add_redirect_filters, base_filter},
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
 
@@ -154,35 +153,21 @@ async fn main() -> color_eyre::Result<()> {
     let api_url = format!("{}/api/", canonical_base_url);
     let api_uri = Uri::from_str(&api_url).unwrap();
 
-    let api_file = include_str!("../res/api.html");
-    let api_swagger = warp::path::end()
-        .and(warp::path::full())
-        .map(move |path: FullPath| {
-            if path.as_str().ends_with('/') {
-                warp::reply::html(api_file).into_response()
-            } else {
-                warp::redirect(api_uri.clone()).into_response()
-            }
-        })
-        .boxed();
-
     let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
+    let pack = api::files::PackService::new(res_path, pki_path.as_deref())?;
     let api_routes = ApiFactory {
         tydb,
         rev,
         lr: lr.clone(),
-        res_path,
-        pki_path: pki_path.as_deref(),
     }
     .make_api();
     let api = warp::path("api").and(
         fallback_routes
-            .or(api_swagger)
             .or(file_routes)
             .or(api_routes)
             .with(warp::compression::gzip()),
     );
-    let api = ApiService::new(db, lr.clone(), openapi);
+    let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri);
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");
@@ -214,27 +199,11 @@ async fn main() -> color_eyre::Result<()> {
     // Initialize the lu-res cache
     let res = ServeDir::new(&cfg.data.lu_res_cache);
 
-    //let api_service = service_fn(handler_api);
-
     // Finally collect all routes
     let routes = BaseRouter::new(api, spa, res);
     let protected = RequireAuthorization::custom(routes, Authorize::new(&cfg.auth));
     let public = services::PublicOr::new(protected, &cfg.data.public);
-
-    // FIXME: base filters
-    //let mut root = base_filter(cfg.general.base.as_deref()).boxed();
-    //root = add_host_filters(root, &cfg.host);
-    //let routes = root.and(routes).boxed();
-
-    // FIXME: Redirect middleware
-    /*
-    let mut redirect: BoxedFilter<(_,)> = warp::any()
-        .and_then(|| async move { Err(warp::reject()) })
-        .boxed();
-
-    redirect = add_redirect_filters(redirect, &cfg);
-    let routes = redirect.or(routes);
-     */
+    let public = redirect::RedirectService::new(public, &cfg);
 
     // FIXME: Log middleware
     //let log = warp::log("paradox::routes");
