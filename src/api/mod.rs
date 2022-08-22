@@ -14,7 +14,7 @@ use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::LocaleNode;
 use http::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE},
     HeaderValue, Request, Response,
 };
 use paradox_typed_db::TypedDatabase;
@@ -195,6 +195,11 @@ impl<'r> ApiRoute<'r> {
     }
 }
 
+enum Accept {
+    Json,
+    Yaml,
+}
+
 #[derive(Clone)]
 pub struct ApiService {
     pub db: Database<'static>,
@@ -208,6 +213,8 @@ fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
 const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
+#[allow(clippy::declare_interior_mutable_const)]
+const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml; charset=utf-8");
 
 impl ApiService {
     pub fn new(
@@ -222,7 +229,7 @@ impl ApiService {
         }
     }
 
-    fn reply_json_string(body: String) -> http::Response<hyper::Body> {
+    fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
         let is_404 = body == "null";
         let content_length = HeaderValue::from(body.len());
         let mut r = Response::new(hyper::Body::from(body));
@@ -232,13 +239,28 @@ impl ApiService {
             *r.status_mut() = http::StatusCode::NOT_FOUND;
         }
         r.headers_mut().append(CONTENT_LENGTH, content_length);
-        r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
+        r.headers_mut().append(CONTENT_TYPE, content_type);
         r
+    }
+
+    fn reply<T: Serialize>(
+        accept: Accept,
+        v: &T,
+    ) -> Result<http::Response<hyper::Body>, io::Error> {
+        match accept {
+            Accept::Json => Self::reply_json(v),
+            Accept::Yaml => Self::reply_yaml(v),
+        }
     }
 
     fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
         let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
-        Ok(Self::reply_json_string(body))
+        Ok(Self::reply_string(body, APPLICATION_JSON))
+    }
+
+    fn reply_yaml<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+        let body = serde_yaml::to_string(&v).map_err(into_other_io_error)?;
+        Ok(Self::reply_string(body, APPLICATION_YAML))
     }
 
     fn reply_404() -> http::Response<hyper::Body> {
@@ -253,17 +275,25 @@ impl ApiService {
 
     fn db_api<T: Serialize>(
         &self,
+        accept: Accept,
         f: impl FnOnce(Database<'static>) -> Result<T, CastError>,
     ) -> Result<Response<hyper::Body>, io::Error> {
         let v = f(self.db).map_err(into_other_io_error)?;
-        Self::reply_json(&v)
+        match accept {
+            Accept::Json => Self::reply_json(&v),
+            Accept::Yaml => Self::reply_yaml(&v),
+        }
     }
 
     /// Get data from `locale.xml`
-    fn locale(&self, rest: Split<char>) -> Result<Response<hyper::Body>, io::Error> {
+    fn locale(
+        &self,
+        accept: Accept,
+        rest: Split<char>,
+    ) -> Result<Response<hyper::Body>, io::Error> {
         match locale::select_node(self.locale_root.as_ref(), rest) {
-            Some((node, locale::Mode::All)) => Self::reply_json(&locale::All::new(node)),
-            Some((node, locale::Mode::Pod)) => Self::reply_json(&locale::Pod::new(node)),
+            Some((node, locale::Mode::All)) => Self::reply(accept, &locale::All::new(node)),
+            Some((node, locale::Mode::Pod)) => Self::reply(accept, &locale::Pod::new(node)),
             None => Ok(Self::reply_404()),
         }
     }
@@ -282,14 +312,22 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
     ///
     /// Here, we turn [ApiRoute]s into [http::Response]s
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let accept = match req.headers().get(ACCEPT) {
+            Some(s) if s == "application/yaml" => Accept::Yaml,
+            _ => Accept::Json,
+        };
         let response = match ApiRoute::from_str(req.uri().path()) {
-            Ok(ApiRoute::Tables) => self.db_api(tables::tables_json),
-            Ok(ApiRoute::TableByName(name)) => self.db_api(|db| tables::table_def_json(db, name)),
-            Ok(ApiRoute::AllTableRows(name)) => self.db_api(|db| tables::table_all_json(db, name)),
-            Ok(ApiRoute::TableRowsByPK(name, key)) => {
-                self.db_api(|db| tables::table_key_json(db, name, key))
+            Ok(ApiRoute::Tables) => self.db_api(accept, tables::tables_json),
+            Ok(ApiRoute::TableByName(name)) => {
+                self.db_api(accept, |db| tables::table_def_json(db, name))
             }
-            Ok(ApiRoute::Locale(rest)) => self.locale(rest),
+            Ok(ApiRoute::AllTableRows(name)) => {
+                self.db_api(accept, |db| tables::table_all_json(db, name))
+            }
+            Ok(ApiRoute::TableRowsByPK(name, key)) => {
+                self.db_api(accept, |db| tables::table_key_json(db, name, key))
+            }
+            Ok(ApiRoute::Locale(rest)) => self.locale(accept, rest),
             Ok(ApiRoute::OpenApiV0) => Self::reply_json(self.openapi.as_ref()),
             Err(()) => Ok(Self::reply_404()),
         };
