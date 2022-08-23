@@ -34,7 +34,7 @@ fn rev_object_type_api(
                 object_ids: objects.as_ref(),
             },
             embedded: ObjectTypeEmbedded {
-                objects: ObjectsRefAdapter::new(&db.objects, objects),
+                objects: ObjectsRefAdapter::new(&db.objects, &objects[..]),
             },
         };
         warp::reply::json(&rep)

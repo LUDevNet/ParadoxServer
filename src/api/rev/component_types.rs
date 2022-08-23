@@ -29,23 +29,33 @@ impl<'a> Components<'a> {
     }
 }
 
-fn rev_component_type_api(
-    _db: &TypedDatabase,
-    rev: Rev,
+fn rev_component_type<'r, 'db, 'd>(
+    db: &'d TypedDatabase<'db>,
+    rev: &'r ReverseLookup,
     key: i32,
-) -> Result<Option<Json>, CastError> {
-    let val = rev.inner.component_use.get(&key);
-    Ok(val.map(|data| {
+) -> Option<Api<&'r ComponentsUse, ObjectTypeEmbedded<'db, 'd, Vec<i32>>>> {
+    let val = rev.component_use.get(&key);
+    val.map(|data: &'r ComponentsUse| {
+        // FIXME: improve this
         let keys: Vec<i32> = data
             .components
             .iter()
             .flat_map(|(_, u)| u.lots.iter().copied())
             .collect();
         let embedded = ObjectTypeEmbedded {
-            objects: ObjectsRefAdapter::new(&_db.objects, &keys),
+            objects: ObjectsRefAdapter::new(&db.objects, keys),
         };
-        warp::reply::json(&Api { data, embedded })
-    }))
+        Api { data, embedded }
+    })
+}
+
+fn rev_component_type_api(
+    db: &TypedDatabase,
+    rev: Rev,
+    key: i32,
+) -> Result<Option<Json>, CastError> {
+    let api = rev_component_type(db, rev.inner, key);
+    Ok(api.as_ref().map(warp::reply::json))
 }
 
 fn rev_single_component_api(
