@@ -130,6 +130,7 @@ impl ApiFactory {
     }
 }
 
+#[derive(Debug)]
 enum ApiRoute<'r> {
     Tables,
     TableByName(&'r str),
@@ -239,15 +240,19 @@ fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper
     r
 }
 
+fn reply_opt<T: Serialize>(
+    accept: Accept,
+    v: Option<&T>,
+) -> Result<http::Response<hyper::Body>, io::Error> {
+    v.map(|v| reply(accept, v))
+        .unwrap_or_else(|| Ok(reply_404()))
+}
+
 fn reply<T: Serialize>(accept: Accept, v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
     match accept {
         Accept::Json => reply_json(v),
         Accept::Yaml => reply_yaml(v),
     }
-}
-
-fn reply_opt_json<T: Serialize>(v: Option<&T>) -> Result<http::Response<hyper::Body>, io::Error> {
-    v.map(reply_json).unwrap_or_else(|| Ok(reply_404()))
 }
 
 fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
@@ -360,24 +365,30 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
             Some(s) if s == "application/yaml" => Accept::Yaml,
             _ => Accept::Json,
         };
-        let response = match ApiRoute::from_str(req.uri().path()) {
-            Ok(ApiRoute::Tables) => self.db_api(accept, tables::tables_json),
-            Ok(ApiRoute::TableByName(name)) => {
+        let route = match ApiRoute::from_str(req.uri().path()) {
+            Ok(route) => {
+                tracing::info!("API Route: {:?}", route);
+                route
+            }
+            Err(()) => return std::future::ready(Ok(reply_404())),
+        };
+        let response = match route {
+            ApiRoute::Tables => self.db_api(accept, tables::tables_json),
+            ApiRoute::TableByName(name) => {
                 self.db_api(accept, |db| tables::table_def_json(db, name))
             }
-            Ok(ApiRoute::AllTableRows(name)) => {
+            ApiRoute::AllTableRows(name) => {
                 self.db_api(accept, |db| tables::table_all_json(db, name))
             }
-            Ok(ApiRoute::TableRowsByPK(name, key)) => {
+            ApiRoute::TableRowsByPK(name, key) => {
                 self.db_api(accept, |db| tables::table_key_json(db, name, key))
             }
-            Ok(ApiRoute::Locale(rest)) => self.locale(accept, rest),
-            Ok(ApiRoute::OpenApiV0) => reply_json(self.openapi.as_ref()),
-            Ok(ApiRoute::SwaggerUI) => Ok(reply_static(SWAGGER_UI_HTML)),
-            Ok(ApiRoute::SwaggerUIRedirect) => self.swagger_ui_redirect(),
-            Ok(ApiRoute::Crc(crc)) => reply(accept, &self.pack.lookup(crc)),
-            Ok(ApiRoute::Rev(route)) => return self.rev.call(route),
-            Err(()) => Ok(reply_404()),
+            ApiRoute::Locale(rest) => self.locale(accept, rest),
+            ApiRoute::OpenApiV0 => reply_json(self.openapi.as_ref()),
+            ApiRoute::SwaggerUI => Ok(reply_static(SWAGGER_UI_HTML)),
+            ApiRoute::SwaggerUIRedirect => self.swagger_ui_redirect(),
+            ApiRoute::Crc(crc) => reply(accept, &self.pack.lookup(crc)),
+            ApiRoute::Rev(route) => return self.rev.call((accept, route)),
         };
         std::future::ready(response)
     }

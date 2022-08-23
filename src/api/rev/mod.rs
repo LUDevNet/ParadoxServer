@@ -32,7 +32,7 @@ pub use data::ReverseLookup;
 
 use crate::data::locale::LocaleRoot;
 
-use super::tydb_filter;
+use super::{adapter::BTreeMapKeysAdapter, tydb_filter};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -95,8 +95,10 @@ pub(super) fn make_api_rev(
         .boxed()
 }
 
+#[derive(Debug)]
 pub(super) enum Route {
     Base,
+    Activities,
     ActivityById(i32),
     BehaviorById(i32),
     ComponentTypes,
@@ -105,7 +107,11 @@ pub(super) enum Route {
 impl Route {
     pub(super) fn from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
         match parts.next() {
-            Some("activity") => match parts.next() {
+            Some("activity" | "activities") => match parts.next() {
+                Some("") => match parts.next() {
+                    None => Ok(Self::Activities),
+                    _ => Err(()),
+                },
                 Some(key) => match parts.next() {
                     None => match key.parse() {
                         Ok(id) => Ok(Self::ActivityById(id)),
@@ -113,7 +119,7 @@ impl Route {
                     },
                     _ => Err(()),
                 },
-                _ => Err(()),
+                None => Ok(Self::Activities),
             },
             Some("behaviors") => match parts.next() {
                 Some(key) => match key.parse() {
@@ -143,6 +149,7 @@ impl Route {
 #[derive(Clone)]
 pub struct RevService {
     db: &'static TypedDatabase<'static>,
+    #[allow(dead_code)]
     loc: LocaleRoot,
     rev: &'static ReverseLookup,
 }
@@ -157,7 +164,7 @@ impl RevService {
     }
 }
 
-impl Service<Route> for RevService {
+impl Service<(super::Accept, Route)> for RevService {
     type Response = http::Response<hyper::Body>;
     type Error = io::Error;
     type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
@@ -166,12 +173,13 @@ impl Service<Route> for RevService {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Route) -> Self::Future {
-        let r = match req {
+    fn call(&mut self, (a, route): (super::Accept, Route)) -> Self::Future {
+        let r = match route {
             Route::Base => super::reply_json(&REV_APIS),
-            Route::ActivityById(id) => super::reply_opt_json(self.rev.activities.get(&id)),
-            Route::BehaviorById(id) => super::reply_json(&behaviors::lookup(self.db, self.rev, id)),
-            Route::ComponentTypes => super::reply_json(&component_types::Components::new(self.rev)),
+            Route::Activities => super::reply(a, &BTreeMapKeysAdapter::new(&self.rev.activities)),
+            Route::ActivityById(id) => super::reply_opt(a, self.rev.activities.get(&id)),
+            Route::BehaviorById(id) => super::reply(a, &behaviors::lookup(self.db, self.rev, id)),
+            Route::ComponentTypes => super::reply(a, &component_types::Components::new(self.rev)),
         };
         std::future::ready(r)
     }
