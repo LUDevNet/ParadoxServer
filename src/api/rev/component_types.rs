@@ -1,20 +1,12 @@
-use std::convert::Infallible;
-
-use assembly_core::buffer::CastError;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
 
 use super::{
     common::{ObjectTypeEmbedded, ObjectsRefAdapter},
-    data::{ComponentsUse, ReverseLookup},
-    Api, Ext, Rev,
+    data::{ComponentUse, ComponentsUse, ReverseLookup},
+    Api,
 };
-use crate::api::{adapter::BTreeMapKeysAdapter, map_opt_res};
+use crate::api::adapter::BTreeMapKeysAdapter;
 
 #[derive(Serialize)]
 pub(super) struct Components<'a> {
@@ -29,7 +21,7 @@ impl<'a> Components<'a> {
     }
 }
 
-fn rev_component_type<'r, 'db, 'd>(
+pub(super) fn rev_component_type<'r, 'db, 'd>(
     db: &'d TypedDatabase<'db>,
     rev: &'r ReverseLookup,
     key: i32,
@@ -49,55 +41,12 @@ fn rev_component_type<'r, 'db, 'd>(
     })
 }
 
-fn rev_component_type_api(
-    db: &TypedDatabase,
-    rev: Rev,
-    key: i32,
-) -> Result<Option<Json>, CastError> {
-    let api = rev_component_type(db, rev.inner, key);
-    Ok(api.as_ref().map(warp::reply::json))
-}
-
-fn rev_single_component_api(
-    _db: &TypedDatabase,
-    rev: Rev,
+pub(super) fn rev_single_component(
+    rev: &ReverseLookup,
     key: i32,
     cid: i32,
-) -> Result<Option<Json>, CastError> {
-    let val = rev
-        .inner
-        .component_use
+) -> Option<&ComponentUse> {
+    rev.component_use
         .get(&key)
-        .and_then(|c| c.components.get(&cid));
-    Ok(val.map(warp::reply::json))
-}
-
-pub(super) fn component_types_api<
-    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
->(
-    rev: &F,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let rev_component_types_base = rev.clone().and(warp::path("component_types"));
-
-    let rev_single_component_type = rev_component_types_base
-        .clone()
-        .and(warp::path::param())
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_single_component_api)
-        .map(map_opt_res)
-        .boxed();
-
-    let rev_component_type = rev_component_types_base
-        .clone()
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_component_type_api)
-        .map(map_opt_res)
-        .boxed();
-
-    rev_single_component_type
-        .or(rev_component_type)
-        .unify()
-        .boxed()
+        .and_then(|c| c.components.get(&cid))
 }

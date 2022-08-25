@@ -74,7 +74,6 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_component_types = component_types::component_types_api(&rev);
     let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
     let rev_mission_types = missions::mission_types_api(&rev, loc);
     let rev_objects = objects::objects_api(&rev);
@@ -88,8 +87,6 @@ pub(super) fn make_api_rev(
         .unify()
         .or(rev_objects)
         .unify()
-        .or(rev_component_types)
-        .unify()
         .or(rev_loot_table_index)
         .unify()
         .boxed()
@@ -102,6 +99,8 @@ pub(super) enum Route {
     ActivityById(i32),
     BehaviorById(i32),
     ComponentTypes,
+    ComponentTypeById(i32),
+    ComponentTypeByIdAndCid(i32, i32),
 }
 
 impl Route {
@@ -128,13 +127,33 @@ impl Route {
                 },
                 _ => Err(()),
             },
-            Some("component_types") => match parts.next() {
+            Some("component_types" | "component-types") => match parts.next() {
                 Some("") => match parts.next() {
                     None => Ok(Self::ComponentTypes),
                     _ => Err(()),
                 },
+                Some(key) => match key.parse() {
+                    Ok(id) => match parts.next() {
+                        None => Ok(Self::ComponentTypeById(id)),
+                        Some("") => match parts.next() {
+                            Some(_) => Err(()),
+                            None => Ok(Self::ComponentTypeById(id)),
+                        },
+                        Some(key2) => match key2.parse() {
+                            Ok(cid) => match parts.next() {
+                                None => Ok(Self::ComponentTypeByIdAndCid(id, cid)),
+                                Some("") => match parts.next() {
+                                    Some(_) => Err(()),
+                                    None => Ok(Self::ComponentTypeByIdAndCid(id, cid)),
+                                },
+                                Some(_) => Err(()),
+                            },
+                            Err(_) => Err(()),
+                        },
+                    },
+                    Err(_) => Err(()),
+                },
                 None => Ok(Self::ComponentTypes),
-                _ => Err(()),
             },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
@@ -180,6 +199,14 @@ impl Service<(super::Accept, Route)> for RevService {
             Route::ActivityById(id) => super::reply_opt(a, self.rev.activities.get(&id)),
             Route::BehaviorById(id) => super::reply(a, &behaviors::lookup(self.db, self.rev, id)),
             Route::ComponentTypes => super::reply(a, &component_types::Components::new(self.rev)),
+            Route::ComponentTypeById(id) => super::reply(
+                a,
+                &component_types::rev_component_type(self.db, self.rev, id),
+            ),
+            Route::ComponentTypeByIdAndCid(key, cid) => super::reply(
+                a,
+                &component_types::rev_single_component(self.rev, key, cid),
+            ),
         };
         std::future::ready(r)
     }
