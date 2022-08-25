@@ -106,16 +106,13 @@ fn tydb_filter<'db>(
 pub(crate) struct ApiFactory {
     pub tydb: &'static TypedDatabase<'static>,
     pub rev: &'static ReverseLookup,
-    pub lr: Arc<LocaleNode>,
 }
 
 impl ApiFactory {
     pub(crate) fn make_api(self) -> BoxedFilter<(WithStatus<Json>,)> {
-        let loc = LocaleRoot::new(self.lr.clone());
-
         let v0_base = warp::path("v0");
 
-        let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
+        let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, self.rev));
         let v0 = v0_base.and(v0_rev);
         let catch_all = make_api_catch_all();
 

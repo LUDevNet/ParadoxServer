@@ -3,6 +3,7 @@
 //! This module contains the reverse API of the server. These are, generally speaking,
 //! database lookups by some specific ID such as an "object template id" or a "skill id"
 //! and produce data from multiple tables.
+use super::PercentDecoded;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::{
@@ -68,20 +69,16 @@ type Ext = (&'static TypedDatabase<'static>, Rev<'static>);
 
 pub(super) fn make_api_rev(
     db: &'static TypedDatabase<'static>,
-    loc: LocaleRoot,
     rev: &'static ReverseLookup,
 ) -> BoxedFilter<(WithStatus<Json>,)> {
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_mission_types = missions::mission_types_api(&rev, loc);
     let rev_objects = objects::objects_api(&rev);
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
 
     rev_skills
-        .or(rev_mission_types)
-        .unify()
         .or(rev_object_types)
         .unify()
         .or(rev_objects)
@@ -99,6 +96,10 @@ pub(super) enum Route {
     ComponentTypeById(i32),
     ComponentTypeByIdAndCid(i32, i32),
     LootTableIndexById(i32),
+    MissionTypes,
+    MissionTypesFull,
+    MissionTypeByTy(PercentDecoded),
+    MissionTypeBySubTy(PercentDecoded, PercentDecoded),
 }
 
 impl Route {
@@ -176,6 +177,42 @@ impl Route {
                 Some(_) => Err(()),
                 None => Err(()),
             },
+            Some("mission-types") => match parts.next() {
+                None => Ok(Self::MissionTypes),
+                Some("") => match parts.next() {
+                    None => Ok(Self::MissionTypes),
+                    Some(_) => Err(()),
+                },
+                Some("full") => match parts.next() {
+                    None => Ok(Self::MissionTypesFull),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::MissionTypesFull),
+                        Some(_) => Err(()),
+                    },
+                    Some(_) => Err(()),
+                },
+                Some(key) => match key.parse() {
+                    Ok(d_type) => match parts.next() {
+                        None => Ok(Self::MissionTypeByTy(d_type)),
+                        Some("") => match parts.next() {
+                            None => Ok(Self::MissionTypeByTy(d_type)),
+                            Some(_) => Err(()),
+                        },
+                        Some(key2) => match key2.parse() {
+                            Ok(d_subtype) => match parts.next() {
+                                None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
+                                Some("") => match parts.next() {
+                                    None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
+                                    Some(_) => Err(()),
+                                },
+                                Some(_) => Err(()),
+                            },
+                            Err(_) => Err(()),
+                        },
+                    },
+                    Err(_) => Err(()),
+                },
+            },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
                 _ => Err(()),
@@ -189,7 +226,6 @@ impl Route {
 #[derive(Clone)]
 pub struct RevService {
     db: &'static TypedDatabase<'static>,
-    #[allow(dead_code)]
     loc: LocaleRoot,
     rev: &'static ReverseLookup,
 }
@@ -231,6 +267,16 @@ impl Service<(super::Accept, Route)> for RevService {
             Route::LootTableIndexById(id) => super::reply(
                 a,
                 &loot_table_index::rev_loop_table_index(self.db, self.rev, id),
+            ),
+            Route::MissionTypes => super::reply(a, &missions::MissionTypesAdapter::new(self.rev)),
+            Route::MissionTypesFull => super::reply(a, &self.rev.mission_types),
+            Route::MissionTypeByTy(ty) => super::reply(
+                a,
+                &missions::rev_mission_type(self.db, self.rev, &self.loc, ty),
+            ),
+            Route::MissionTypeBySubTy(d_type, d_subtype) => super::reply(
+                a,
+                &missions::rev_mission_subtype(self.db, self.rev, &self.loc, d_type, d_subtype),
             ),
         };
         std::future::ready(r)

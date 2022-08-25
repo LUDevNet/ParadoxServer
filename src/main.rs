@@ -154,12 +154,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
     let pack = api::files::PackService::new(res_path, pki_path.as_deref())?;
-    let api_routes = ApiFactory {
-        tydb,
-        rev,
-        lr: lr.clone(),
-    }
-    .make_api();
+    let api_routes = ApiFactory { tydb, rev }.make_api();
     let api = warp::path("api").and(
         fallback_routes
             .or(file_routes)

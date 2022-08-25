@@ -1,24 +1,19 @@
-use std::{borrow::Borrow, collections::BTreeMap, convert::Infallible};
+use std::{borrow::Borrow, collections::BTreeMap};
 
-use assembly_core::buffer::CastError;
 use assembly_xml::localization::LocaleNode;
 use paradox_typed_db::{rows::MissionsRow, TypedDatabase};
 use serde::{ser::SerializeMap, Serialize};
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
 
+use super::ReverseLookup;
 use crate::{
     api::{
         adapter::{I32Slice, IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
-        map_res, PercentDecoded,
+        PercentDecoded,
     },
     data::locale::LocaleRoot,
 };
 
-use super::{common::MissionsTaskIconsAdapter, Api, Rev};
+use super::{common::MissionsTaskIconsAdapter, Api};
 
 #[derive(Debug, Clone)]
 struct MissionSubtypesAdapter<'a>(&'a BTreeMap<String, Vec<i32>>);
@@ -33,7 +28,13 @@ impl<'a> Serialize for MissionSubtypesAdapter<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct MissionTypesAdapter<'a>(&'a BTreeMap<String, BTreeMap<String, Vec<i32>>>);
+pub(super) struct MissionTypesAdapter<'a>(&'a BTreeMap<String, BTreeMap<String, Vec<i32>>>);
+
+impl<'a> MissionTypesAdapter<'a> {
+    pub fn new(rev: &'a ReverseLookup) -> Self {
+        Self(&rev.mission_types)
+    }
+}
 
 impl<'a> Serialize for MissionTypesAdapter<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -46,12 +47,6 @@ impl<'a> Serialize for MissionTypesAdapter<'a> {
         }
         m.end()
     }
-}
-
-fn rev_mission_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
-    Ok(warp::reply::json(&MissionTypesAdapter(
-        &rev.inner.mission_types,
-    )))
 }
 
 #[derive(Clone, Serialize)]
@@ -79,7 +74,7 @@ type MissionsAdapter<'a, 'b> =
 
 /// This is the root type that holds all embedded value for the `mission_types` lookup
 #[derive(Clone, Serialize)]
-struct MissionTypesEmbedded<'a, 'b> {
+pub(super) struct MissionTypesEmbedded<'a, 'b> {
     #[serde(rename = "Missions")]
     missions: MissionsAdapter<'a, 'b>,
     #[serde(rename = "MissionTaskIcons")]
@@ -88,20 +83,21 @@ struct MissionTypesEmbedded<'a, 'b> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct Subtypes<'a> {
+pub(super) struct Subtypes<'a> {
     subtypes: MissionSubtypesAdapter<'a>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct MissionIDList<'b> {
+pub(super) struct MissionIDList<'b> {
     mission_ids: &'b [i32],
 }
 
+type MissionsReply<'a, 'b> = Api<MissionIDList<'b>, MissionTypesEmbedded<'a, 'b>>;
 fn missions_reply<'a, 'b>(
     db: &'b TypedDatabase<'a>,
     loc: &'b LocaleRoot,
     mission_ids: &'b [i32],
-) -> Api<MissionIDList<'b>, MissionTypesEmbedded<'a, 'b>> {
+) -> MissionsReply<'a, 'b> {
     Api {
         data: MissionIDList { mission_ids },
         embedded: MissionTypesEmbedded {
@@ -112,93 +108,55 @@ fn missions_reply<'a, 'b>(
     }
 }
 
-fn rev_mission_type_api(
-    db: &TypedDatabase,
-    rev: Rev,
-    loc: LocaleRoot,
-    d_type: PercentDecoded,
-) -> Result<Json, CastError> {
-    let key: &String = d_type.borrow();
-    match rev.inner.mission_types.get(key) {
-        Some(t) => match t.get("") {
-            Some(mission_ids) => Ok(warp::reply::json(&missions_reply(db, &loc, mission_ids))),
-            None => Ok(warp::reply::json(&Subtypes {
-                subtypes: MissionSubtypesAdapter(t),
-            })),
-        },
-        None => Ok(warp::reply::json(&())),
+pub(super) enum RevMissionTypeReply<'a, 'b> {
+    Subtypes(Subtypes<'a>),
+    Missions(MissionsReply<'a, 'b>),
+    None,
+}
+
+impl<'a, 'b> Serialize for RevMissionTypeReply<'a, 'b> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Subtypes(s) => s.serialize(serializer),
+            Self::Missions(m) => m.serialize(serializer),
+            Self::None => serializer.serialize_none(),
+        }
     }
 }
 
-fn rev_mission_subtype_api(
-    db: &TypedDatabase,
-    rev: Rev,
-    loc: LocaleRoot,
+pub(super) fn rev_mission_type<'a, 'b: 'a>(
+    db: &'b TypedDatabase<'a>,
+    rev: &'b ReverseLookup,
+    loc: &'b LocaleRoot,
+    d_type: PercentDecoded,
+) -> RevMissionTypeReply<'a, 'b> {
+    let key: &String = d_type.borrow();
+    match rev.mission_types.get(key) {
+        Some(t) => match t.get("") {
+            Some(mission_ids) => {
+                RevMissionTypeReply::Missions(missions_reply(db, loc, mission_ids))
+            }
+            None => RevMissionTypeReply::Subtypes(Subtypes {
+                subtypes: MissionSubtypesAdapter(t),
+            }),
+        },
+        None => RevMissionTypeReply::None,
+    }
+}
+
+pub(super) fn rev_mission_subtype<'a, 'b>(
+    db: &'b TypedDatabase<'a>,
+    rev: &'b ReverseLookup,
+    loc: &'b LocaleRoot,
     d_type: PercentDecoded,
     d_subtype: PercentDecoded,
-) -> Result<Json, CastError> {
+) -> Option<MissionsReply<'a, 'b>> {
     let t_key: &String = d_type.borrow();
-    let t = rev.inner.mission_types.get(t_key);
+    let t = rev.mission_types.get(t_key)?;
     let s_key: &String = d_subtype.borrow();
-    let s = t.and_then(|t| t.get(s_key));
-    let m = s.map(|mission_ids| missions_reply(db, &loc, mission_ids));
-    Ok(warp::reply::json(&m))
-}
-
-fn rev_mission_types_full_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
-    Ok(warp::reply::json(&rev.inner.mission_types))
-}
-
-pub(super) fn mission_types_api<
-    F: Filter<Extract = super::Ext, Error = Infallible> + Send + Sync + Clone + 'static,
->(
-    rev: &F,
-    loc: LocaleRoot,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let loc_filter = warp::any().map(move || loc.clone());
-    let rev_mission_types_base = rev.clone().and(warp::path("mission_types"));
-
-    let rev_mission_types_full = rev_mission_types_base
-        .clone()
-        .and(warp::path("full"))
-        .and(warp::path::end())
-        .map(rev_mission_types_full_api)
-        .map(map_res)
-        .boxed();
-
-    let rev_mission_type = rev_mission_types_base
-        .clone()
-        .and(loc_filter.clone())
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_mission_type_api)
-        .map(map_res)
-        .boxed();
-
-    let rev_mission_subtype = rev_mission_types_base
-        .clone()
-        .and(loc_filter)
-        .and(warp::path::param())
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_mission_subtype_api)
-        .map(map_res)
-        .boxed();
-
-    let rev_mission_types_list = rev_mission_types_base
-        .clone()
-        .and(warp::path::end())
-        .map(rev_mission_types_api)
-        .map(map_res)
-        .boxed();
-
-    let rev_mission_types = rev_mission_types_full
-        .or(rev_mission_type)
-        .unify()
-        .or(rev_mission_subtype)
-        .unify()
-        .or(rev_mission_types_list)
-        .unify();
-
-    rev_mission_types.boxed()
+    let mission_ids = t.get(s_key)?;
+    Some(missions_reply(db, loc, mission_ids))
 }
