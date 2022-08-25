@@ -74,7 +74,6 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_loot_table_index = loot_table_index::loot_table_index_api(&rev);
     let rev_mission_types = missions::mission_types_api(&rev, loc);
     let rev_objects = objects::objects_api(&rev);
     let rev_object_types = object_types::object_types_api(&rev);
@@ -86,8 +85,6 @@ pub(super) fn make_api_rev(
         .or(rev_object_types)
         .unify()
         .or(rev_objects)
-        .unify()
-        .or(rev_loot_table_index)
         .unify()
         .boxed()
 }
@@ -101,9 +98,27 @@ pub(super) enum Route {
     ComponentTypes,
     ComponentTypeById(i32),
     ComponentTypeByIdAndCid(i32, i32),
+    LootTableIndexById(i32),
 }
 
 impl Route {
+    fn lti_from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some(key) => match key.parse() {
+                Ok(id) => match parts.next() {
+                    None => Ok(Self::LootTableIndexById(id)),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::LootTableIndexById(id)),
+                        Some(_) => Err(()),
+                    },
+                    _ => Err(()),
+                },
+                Err(_) => Err(()),
+            },
+            _ => Err(()),
+        }
+    }
+
     pub(super) fn from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
         match parts.next() {
             Some("activity" | "activities") => match parts.next() {
@@ -154,6 +169,12 @@ impl Route {
                     Err(_) => Err(()),
                 },
                 None => Ok(Self::ComponentTypes),
+            },
+            Some("loot_table_index") => Self::lti_from_parts(parts),
+            Some("loot-tables") => match parts.next() {
+                Some("indices") => Self::lti_from_parts(parts),
+                Some(_) => Err(()),
+                None => Err(()),
             },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
@@ -206,6 +227,10 @@ impl Service<(super::Accept, Route)> for RevService {
             Route::ComponentTypeByIdAndCid(key, cid) => super::reply(
                 a,
                 &component_types::rev_single_component(self.rev, key, cid),
+            ),
+            Route::LootTableIndexById(id) => super::reply(
+                a,
+                &loot_table_index::rev_loop_table_index(self.db, self.rev, id),
             ),
         };
         std::future::ready(r)

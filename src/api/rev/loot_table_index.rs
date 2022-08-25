@@ -1,55 +1,41 @@
-use std::convert::Infallible;
-
-use crate::api::{
-    adapter::{AdapterLayout, TypedTableIterAdapter},
-    map_opt,
+use std::{
+    collections::{btree_map, BTreeMap},
+    iter::Copied,
 };
+
+use crate::api::adapter::{AdapterLayout, TypedTableIterAdapter};
 use paradox_typed_db::{columns::LootTableColumn, rows::LootTableRow, TypedDatabase};
 use serde::Serialize;
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
 
-use super::{Ext, Rev};
+use super::ReverseLookup;
+
+type ResultInner<'db, 'r> = TypedTableIterAdapter<
+    'db,
+    'r,
+    LootTableRow<'db, 'r>,
+    &'r BTreeMap<i32, i32>,
+    Copied<btree_map::Keys<'r, i32, i32>>,
+>;
 
 #[derive(Clone, Serialize)]
-pub struct LootTableResult<T> {
-    loot_table: T,
+pub struct LootTableResult<'db, 'r> {
+    loot_table: ResultInner<'db, 'r>,
 }
 
-fn rev_loop_table_index_api(db: &TypedDatabase, rev: Rev<'static>, index: i32) -> Option<Json> {
-    rev.inner
-        .loot_table_index
-        .get(&index)
-        .map(|g| {
-            let keys = g.items.keys().copied();
-            let index = &g.items;
-            let list: TypedTableIterAdapter<LootTableRow, _, _> = TypedTableIterAdapter {
-                index,
-                keys,
-                table: &db.loot_table,
-                id_col: db.loot_table.get_col(LootTableColumn::Id).unwrap(),
-                layout: AdapterLayout::Seq,
-            };
-            list
-        })
-        .map(|loot_table| warp::reply::json(&LootTableResult { loot_table }))
-}
-
-pub(super) fn loot_table_index_api<
-    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
->(
-    rev: &F,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let rev_loot_table_index_base = rev.clone().and(warp::path("loot_table_index"));
-
-    rev_loot_table_index_base
-        .clone()
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_loop_table_index_api)
-        .map(map_opt)
-        .boxed()
+pub(super) fn rev_loop_table_index<'db, 'r>(
+    db: &'r TypedDatabase<'db>,
+    rev: &'r ReverseLookup,
+    index: i32,
+) -> Option<LootTableResult<'db, 'r>> {
+    let lti_rev = rev.loot_table_index.get(&index)?;
+    let keys = lti_rev.items.keys().copied();
+    let index = &lti_rev.items;
+    let loot_table = TypedTableIterAdapter {
+        index,
+        keys,
+        table: &db.loot_table,
+        id_col: db.loot_table.get_col(LootTableColumn::Id).unwrap(),
+        layout: AdapterLayout::Seq,
+    };
+    Some(LootTableResult { loot_table })
 }
