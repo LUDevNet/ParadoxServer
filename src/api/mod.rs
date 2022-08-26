@@ -286,6 +286,27 @@ impl ApiService {
         r.headers_mut().append(LOCATION, self.api_url.clone());
         Ok(r)
     }
+
+    fn res_request(
+        &self,
+        accept: Accept,
+        rest: Split<char>,
+    ) -> ApiFuture<Result<Response<hyper::Body>, io::Error>> {
+        ApiFuture::boxed({
+            let sender = self.res.clone();
+            let mut bytes = Vec::new();
+            for part in rest {
+                bytes.push(b'\\');
+                bytes.extend_from_slice(part.as_bytes());
+            }
+            async move {
+                match sender.request(Bytes::from(bytes)).await {
+                    Ok(v) => reply(accept, &v),
+                    Err(()) => Ok(reply_404()),
+                }
+            }
+        })
+    }
 }
 
 const SWAGGER_UI_HTML: &str = include_str!("../../res/api.html");
@@ -358,22 +379,7 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
             ApiRoute::SwaggerUIRedirect => self.swagger_ui_redirect(),
             ApiRoute::Crc(crc) => reply(accept, &self.pack.lookup(crc)),
             ApiRoute::Rev(route) => return ApiFuture::Ready(self.rev.call((accept, route))),
-            ApiRoute::Res(rest) => {
-                return ApiFuture::boxed({
-                    let sender = self.res.clone();
-                    let mut bytes = Vec::new();
-                    for part in rest {
-                        bytes.push(b'/');
-                        bytes.extend_from_slice(part.as_bytes());
-                    }
-                    async move {
-                        match sender.request(Bytes::from(bytes)).await {
-                            Ok(v) => reply(accept, &v),
-                            Err(()) => Ok(reply_404()),
-                        }
-                    }
-                })
-            }
+            ApiRoute::Res(rest) => return self.res_request(accept, rest),
         };
         ApiFuture::ready(response)
     }

@@ -93,7 +93,7 @@ pub fn spawn_handler(_path: &Path) -> EventSender {
             match rx.recv().await {
                 None => break,
                 Some(Event::Path(tail, reply)) => {
-                    const PREFIX: &[u8] = br"client\res\";
+                    const PREFIX: &[u8] = br"client\res";
                     let mut path = Vec::with_capacity(PREFIX.len() + tail.len());
                     path.extend_from_slice(PREFIX);
                     path.extend_from_slice(&tail);
