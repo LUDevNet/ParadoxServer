@@ -73,14 +73,6 @@ fn map_res<E: Error>(v: Result<Json, E>) -> WithStatus<Json> {
     }
 }
 
-fn map_opt_res<E: Error>(v: Result<Option<Json>, E>) -> WithStatus<Json> {
-    match v {
-        Ok(Some(res)) => wrap_200(res),
-        Ok(None) => wrap_404(warp::reply::json(&())),
-        Err(e) => wrap_500(warp::reply::json(&e.to_string())),
-    }
-}
-
 fn wrap_404<A: Reply>(reply: A) -> WithStatus<A> {
     warp::reply::with_status(reply, warp::http::StatusCode::NOT_FOUND)
 }

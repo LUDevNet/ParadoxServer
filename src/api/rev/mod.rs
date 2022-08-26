@@ -73,10 +73,8 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
-
-    rev_skills.or(rev_object_types).unify().boxed()
+    rev_skills.boxed()
 }
 
 #[derive(Debug)]
@@ -94,6 +92,8 @@ pub(super) enum Route {
     MissionTypeByTy(PercentDecoded),
     MissionTypeBySubTy(PercentDecoded, PercentDecoded),
     ObjectsSearchIndex,
+    ObjectTypes,
+    ObjectTypeByName(PercentDecoded),
 }
 
 impl Route {
@@ -218,6 +218,24 @@ impl Route {
                 },
                 _ => Err(()),
             },
+            Some("object_types") => match parts.next() {
+                None => Ok(Self::ObjectTypes),
+                Some("") => match parts.next() {
+                    None => Ok(Self::ObjectTypes),
+                    _ => Err(()),
+                },
+                Some(key) => match key.parse() {
+                    Ok(ty) => match parts.next() {
+                        None => Ok(Self::ObjectTypeByName(ty)),
+                        Some("") => match parts.next() {
+                            None => Ok(Self::ObjectTypeByName(ty)),
+                            _ => Err(()),
+                        },
+                        Some(_) => Err(()),
+                    },
+                    Err(_) => Err(()),
+                },
+            },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
                 _ => Err(()),
@@ -284,6 +302,12 @@ impl Service<(super::Accept, Route)> for RevService {
                 &missions::rev_mission_subtype(self.db, self.rev, &self.loc, d_type, d_subtype),
             ),
             Route::ObjectsSearchIndex => super::reply(a, &self.rev.objects.search_index),
+            Route::ObjectTypes => {
+                super::reply(a, &BTreeMapKeysAdapter::new(&self.rev.object_types))
+            }
+            Route::ObjectTypeByName(ty) => {
+                super::reply(a, &object_types::rev_object_type(self.db, self.rev, ty))
+            }
         };
         std::future::ready(r)
     }

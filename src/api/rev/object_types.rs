@@ -1,72 +1,30 @@
-use std::{borrow::Borrow, convert::Infallible};
+use std::borrow::Borrow;
 
-use assembly_core::buffer::CastError;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
 
-use super::{common::ObjectTypeEmbedded, Ext};
+use super::{common::ObjectTypeEmbedded, ReverseLookup};
 use crate::api::{
-    map_opt_res, map_res,
-    rev::{common::ObjectsRefAdapter, Api, Rev},
+    rev::{common::ObjectsRefAdapter, Api},
     PercentDecoded,
 };
 
 #[derive(Serialize)]
-struct ObjectIDs<'a, T> {
+pub(super) struct ObjectIDs<'a, T> {
     object_ids: &'a [T],
 }
 
-fn rev_object_type_api(
-    db: &TypedDatabase,
-    rev: Rev,
+pub(super) fn rev_object_type<'a, 'b, 'r>(
+    db: &'b TypedDatabase<'a>,
+    rev: &'r ReverseLookup,
     ty: PercentDecoded,
-) -> Result<Option<Json>, CastError> {
+) -> Option<Api<ObjectIDs<'r, i32>, ObjectTypeEmbedded<'a, 'b, &'r [i32]>>> {
     let key: &String = ty.borrow();
-    tracing::info!("{}", key);
-    Ok(rev.inner.object_types.get(key).map(|objects| {
-        let rep = Api {
-            data: ObjectIDs {
-                object_ids: objects.as_ref(),
-            },
-            embedded: ObjectTypeEmbedded {
-                objects: ObjectsRefAdapter::new(&db.objects, &objects[..]),
-            },
-        };
-        warp::reply::json(&rep)
-    }))
-}
-
-fn rev_object_types_api(_db: &TypedDatabase, rev: Rev) -> Result<Json, CastError> {
-    let keys: Vec<_> = rev.inner.object_types.keys().collect();
-    Ok(warp::reply::json(&keys))
-}
-
-pub(super) fn object_types_api<
-    F: Filter<Extract = Ext, Error = Infallible> + Send + Sync + Clone + 'static,
->(
-    rev: &F,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let rev_object_types_base = rev.clone().and(warp::path("object_types"));
-
-    let rev_object_type = rev_object_types_base
-        .clone()
-        .and(warp::path::param())
-        .and(warp::path::end())
-        .map(rev_object_type_api)
-        .map(map_opt_res)
-        .boxed();
-
-    let rev_object_types_list = rev_object_types_base
-        .clone()
-        .and(warp::path::end())
-        .map(rev_object_types_api)
-        .map(map_res)
-        .boxed();
-
-    rev_object_type.or(rev_object_types_list).unify().boxed()
+    let object_ids: &[i32] = rev.object_types.get(key)?.as_ref();
+    Some(Api {
+        data: ObjectIDs { object_ids },
+        embedded: ObjectTypeEmbedded {
+            objects: ObjectsRefAdapter::new(&db.objects, object_ids),
+        },
+    })
 }
