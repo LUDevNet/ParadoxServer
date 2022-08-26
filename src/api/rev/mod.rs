@@ -26,7 +26,6 @@ mod component_types;
 mod loot_table_index;
 mod missions;
 mod object_types;
-mod objects;
 mod skills;
 
 pub use data::ReverseLookup;
@@ -74,16 +73,10 @@ pub(super) fn make_api_rev(
     let db = tydb_filter(db);
     let rev = db.and(rev_filter(rev));
 
-    let rev_objects = objects::objects_api(&rev);
     let rev_object_types = object_types::object_types_api(&rev);
     let rev_skills = skills::skill_api(&rev);
 
-    rev_skills
-        .or(rev_object_types)
-        .unify()
-        .or(rev_objects)
-        .unify()
-        .boxed()
+    rev_skills.or(rev_object_types).unify().boxed()
 }
 
 #[derive(Debug)]
@@ -100,6 +93,7 @@ pub(super) enum Route {
     MissionTypesFull,
     MissionTypeByTy(PercentDecoded),
     MissionTypeBySubTy(PercentDecoded, PercentDecoded),
+    ObjectsSearchIndex,
 }
 
 impl Route {
@@ -213,6 +207,17 @@ impl Route {
                     Err(_) => Err(()),
                 },
             },
+            Some("objects") => match parts.next() {
+                Some("search_index" | "search-index") => match parts.next() {
+                    None => Ok(Self::ObjectsSearchIndex),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::ObjectsSearchIndex),
+                        _ => Err(()),
+                    },
+                    Some(_) => Err(()),
+                },
+                _ => Err(()),
+            },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
                 _ => Err(()),
@@ -278,6 +283,7 @@ impl Service<(super::Accept, Route)> for RevService {
                 a,
                 &missions::rev_mission_subtype(self.db, self.rev, &self.loc, d_type, d_subtype),
             ),
+            Route::ObjectsSearchIndex => super::reply(a, &self.rev.objects.search_index),
         };
         std::future::ready(r)
     }
