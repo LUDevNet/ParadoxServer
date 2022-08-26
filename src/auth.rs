@@ -1,21 +1,11 @@
-use std::{
-    collections::HashSet,
-    marker::PhantomData,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use http::{
     header::{AUTHORIZATION, USER_AGENT, WWW_AUTHENTICATE},
     HeaderValue, Request, Response,
 };
+use hyper::StatusCode;
 use tower_http::auth::AuthorizeRequest;
-use warp::{
-    hyper::StatusCode,
-    reply::{with_header, with_status, Html, WithHeader, WithStatus},
-    Future, Rejection,
-};
 
 use crate::config::AuthConfig;
 
@@ -37,37 +27,6 @@ pub struct BasicCfg {
 pub enum AuthImpl {
     None,
     Basic(Arc<BasicCfg>),
-}
-
-pub struct CheckFuture {
-    is_allowed: bool,
-}
-
-type CheckResult = Result<WithStatus<WithHeader<Html<&'static str>>>, Rejection>;
-
-impl CheckFuture {
-    fn get(&self) -> CheckResult {
-        if self.is_allowed {
-            Err(warp::reject()) // and fall through to the app
-        } else {
-            Ok(with_status(
-                with_header(
-                    warp::reply::html("Access denied"),
-                    "WWW-Authenticate",
-                    "Basic realm=\"LU-Explorer\"",
-                ),
-                StatusCode::UNAUTHORIZED,
-            ))
-        }
-    }
-}
-
-impl Future for CheckFuture {
-    type Output = CheckResult;
-
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(self.get())
-    }
 }
 
 impl AuthImpl {
