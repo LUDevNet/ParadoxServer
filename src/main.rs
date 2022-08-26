@@ -13,7 +13,6 @@ use auth::Authorize;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-use data::fs::make_file_filter;
 use http::Uri;
 use hyper::server::Server;
 use mapr::Mmap;
@@ -119,9 +118,6 @@ async fn main() -> color_eyre::Result<()> {
         .as_deref()
         .unwrap_or_else(|| Path::new("client/res"));
 
-    // v1/res
-    let file_api = make_file_filter(res_path);
-
     let pki_path = cfg.data.versions.as_ref().map(|x| x.join("primary.pki"));
 
     let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_), .. })) {
@@ -134,7 +130,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
     let pack = api::files::PackService::new(res_path, pki_path.as_deref())?;
-    let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri, tydb, rev);
+    let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri, tydb, rev, res_path);
 
     let spa_path = &cfg.data.explorer_spa;
     let spa_index = spa_path.join("index.html");

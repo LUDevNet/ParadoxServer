@@ -1,7 +1,8 @@
 use std::{
     borrow::Borrow,
-    future::Ready,
+    future::{ready, Ready},
     io,
+    path::Path,
     str::{FromStr, Split, Utf8Error},
     sync::Arc,
     task::{self, Poll},
@@ -10,16 +11,22 @@ use std::{
 use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::LocaleNode;
+use futures_util::{future::BoxFuture, Future, FutureExt};
 use http::{
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
     HeaderValue, Request, Response, StatusCode, Uri,
 };
+use hyper::body::Bytes;
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
+use pin_project::pin_project;
 use serde::Serialize;
 use tower::Service;
 
-use crate::data::locale::LocaleRoot;
+use crate::data::{
+    fs::{spawn_handler, EventSender},
+    locale::LocaleRoot,
+};
 
 use self::{
     docs::OpenApiService,
@@ -71,6 +78,7 @@ enum ApiRoute<'r> {
     OpenApiV0,
     SwaggerUI,
     SwaggerUIRedirect,
+    Res(Split<'r, char>),
 }
 
 impl<'r> ApiRoute<'r> {
@@ -117,6 +125,7 @@ impl<'r> ApiRoute<'r> {
                 None => Ok(Self::Tables),
                 _ => Err(()),
             },
+            Some("res") => Ok(Self::Res(parts)),
             _ => Err(()),
         }
     }
@@ -212,6 +221,7 @@ pub struct ApiService {
     pack: files::PackService,
     api_url: HeaderValue,
     rev: rev::RevService,
+    res: EventSender,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
@@ -222,6 +232,7 @@ const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml
 const TEXT_HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
 
 impl ApiService {
+    #[allow(clippy::too_many_arguments)] // FIXME
     pub(crate) fn new(
         db: Database<'static>,
         locale_root: Arc<LocaleNode>,
@@ -230,6 +241,7 @@ impl ApiService {
         api_uri: Uri,
         tydb: &'static TypedDatabase,
         rev: &'static ReverseLookup,
+        res_path: &Path,
     ) -> Self {
         let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
         Self {
@@ -238,6 +250,7 @@ impl ApiService {
             locale_root: locale_root.clone(),
             openapi,
             api_url,
+            res: spawn_handler(res_path),
             rev: RevService::new(tydb, LocaleRoot { root: locale_root }, rev),
         }
     }
@@ -277,10 +290,37 @@ impl ApiService {
 
 const SWAGGER_UI_HTML: &str = include_str!("../../res/api.html");
 
+#[pin_project(project = ApiFutureProj)]
+pub enum ApiFuture<T> {
+    Ready(#[pin] Ready<T>),
+    Boxed(#[pin] BoxFuture<'static, T>),
+}
+
+impl<T> ApiFuture<T> {
+    pub fn ready(value: T) -> Self {
+        Self::Ready(ready(value))
+    }
+
+    pub fn boxed(f: impl Future<Output = T> + Send + 'static) -> Self {
+        Self::Boxed(f.boxed())
+    }
+}
+
+impl<T> std::future::Future for ApiFuture<T> {
+    type Output = T;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        match self.project() {
+            ApiFutureProj::Ready(f) => f.poll(cx),
+            ApiFutureProj::Boxed(f) => f.poll(cx),
+        }
+    }
+}
+
 impl<ReqBody> Service<Request<ReqBody>> for ApiService {
     type Error = io::Error;
     type Response = Response<hyper::Body>;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
+    type Future = ApiFuture<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -299,7 +339,7 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
                 tracing::info!("API Route: {:?}", route);
                 route
             }
-            Err(()) => return std::future::ready(Ok(reply_404())),
+            Err(()) => return ApiFuture::ready(Ok(reply_404())),
         };
         let response = match route {
             ApiRoute::Tables => self.db_api(accept, tables::tables_json),
@@ -317,8 +357,24 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
             ApiRoute::SwaggerUI => Ok(reply_static(SWAGGER_UI_HTML)),
             ApiRoute::SwaggerUIRedirect => self.swagger_ui_redirect(),
             ApiRoute::Crc(crc) => reply(accept, &self.pack.lookup(crc)),
-            ApiRoute::Rev(route) => return self.rev.call((accept, route)),
+            ApiRoute::Rev(route) => return ApiFuture::Ready(self.rev.call((accept, route))),
+            ApiRoute::Res(rest) => {
+                return ApiFuture::boxed({
+                    let sender = self.res.clone();
+                    let mut bytes = Vec::new();
+                    for part in rest {
+                        bytes.push(b'/');
+                        bytes.extend_from_slice(part.as_bytes());
+                    }
+                    async move {
+                        match sender.request(Bytes::from(bytes)).await {
+                            Ok(v) => reply(accept, &v),
+                            Err(()) => Ok(reply_404()),
+                        }
+                    }
+                })
+            }
         };
-        std::future::ready(response)
+        ApiFuture::ready(response)
     }
 }

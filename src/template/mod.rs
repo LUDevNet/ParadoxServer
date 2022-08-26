@@ -414,7 +414,6 @@ impl fmt::Display for LockError {
 }
 
 impl std::error::Error for LockError {}
-impl warp::reject::Reject for LockError {}
 
 impl tower_service::Service<IndexParams> for RenderService {
     type Response = String;

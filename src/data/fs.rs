@@ -13,16 +13,10 @@ use assembly_pack::{
     pki::core::{PackFileRef, PackIndexFile},
 };
 
+use hyper::body::Bytes;
 use serde::Serialize;
 use tokio::sync::oneshot::Sender;
 use tracing::error;
-use warp::{
-    filters::BoxedFilter,
-    hyper::StatusCode,
-    path::Tail,
-    reply::{json, with_status, Json, WithStatus},
-    Filter, Rejection,
-};
 
 pub fn cleanup_path(url: &Latin1Str) -> Option<PathBuf> {
     let url = url.decode().replace('\\', "/").to_ascii_lowercase();
@@ -61,51 +55,58 @@ impl LuRes {
     }
 }
 
-enum Event {
-    Path(Tail, Sender<Result<WithStatus<Json>, Rejection>>),
+pub enum Event {
+    Path(Bytes, Sender<Reply>),
 }
 
-#[derive(Serialize)]
-struct Reply {
+#[derive(Debug, Clone, Serialize)]
+pub struct Reply {
     crc: u32,
 }
 
-pub fn make_file_filter(_path: &Path) -> BoxedFilter<(WithStatus<Json>,)> {
+#[derive(Debug, Clone)]
+pub struct EventSender(tokio::sync::mpsc::Sender<Event>);
+
+impl EventSender {
+    pub async fn request(&self, tail: Bytes) -> Result<Reply, ()> {
+        let (otx, orx) = tokio::sync::oneshot::channel();
+        match self.0.send(Event::Path(tail, otx)).await {
+            Ok(()) => match orx.await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    error!("{}", e);
+                    Err(())
+                }
+            },
+            Err(e) => {
+                error!("{}", e);
+                Err(())
+            }
+        }
+    }
+}
+
+pub fn spawn_handler(_path: &Path) -> EventSender {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 None => break,
                 Some(Event::Path(tail, reply)) => {
-                    let path = format!("client\\res\\{}", tail.as_str());
-                    let crc = calculate_crc(path.as_bytes());
+                    const PREFIX: &[u8] = br"client\res\";
+                    let mut path = Vec::with_capacity(PREFIX.len() + tail.len());
+                    path.extend_from_slice(PREFIX);
+                    path.extend_from_slice(&tail);
+                    let crc = calculate_crc(&path);
 
-                    let t = with_status(json(&Reply { crc }), StatusCode::OK);
+                    let t = Reply { crc };
                     // Ignore replies that get dropped
-                    let _ = reply.send(Ok(t));
+                    let _ = reply.send(t);
                 }
             }
         }
     });
-    warp::path::tail()
-        .and_then(move |tail: Tail| {
-            let tx = tx.clone();
-            async move {
-                let (otx, orx) = tokio::sync::oneshot::channel();
-                if tx.send(Event::Path(tail, otx)).await.is_ok() {
-                    match orx.await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            error!("{}", e);
-                            Err(warp::reject::not_found())
-                        }
-                    }
-                } else {
-                    Err(warp::reject::not_found())
-                }
-            }
-        })
-        .boxed()
+    EventSender(tx)
 }
 
 /// A single file
