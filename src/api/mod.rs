@@ -1,7 +1,5 @@
 use std::{
     borrow::Borrow,
-    convert::Infallible,
-    error::Error,
     future::Ready,
     io,
     str::{FromStr, Split, Utf8Error},
@@ -20,18 +18,13 @@ use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use tower::Service;
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter, Reply,
-};
 
 use crate::data::locale::LocaleRoot;
 
 use self::{
     docs::OpenApiService,
     files::PackService,
-    rev::{make_api_rev, RevService, ReverseLookup},
+    rev::{RevService, ReverseLookup},
 };
 
 pub mod adapter;
@@ -63,52 +56,6 @@ impl ToString for PercentDecoded {
     #[inline]
     fn to_string(&self) -> String {
         self.0.clone()
-    }
-}
-
-fn map_res<E: Error>(v: Result<Json, E>) -> WithStatus<Json> {
-    match v {
-        Ok(res) => wrap_200(res),
-        Err(e) => wrap_500(warp::reply::json(&e.to_string())),
-    }
-}
-
-fn wrap_404<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::NOT_FOUND)
-}
-
-pub fn wrap_200<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::OK)
-}
-
-pub fn wrap_500<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-fn make_api_catch_all() -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone {
-    warp::any().map(|| warp::reply::json(&404)).map(wrap_404)
-}
-
-fn tydb_filter<'db>(
-    db: &'db TypedDatabase<'db>,
-) -> impl Filter<Extract = (&'db TypedDatabase<'db>,), Error = Infallible> + Clone + 'db {
-    warp::any().map(move || db)
-}
-
-pub(crate) struct ApiFactory {
-    pub tydb: &'static TypedDatabase<'static>,
-    pub rev: &'static ReverseLookup,
-}
-
-impl ApiFactory {
-    pub(crate) fn make_api(self) -> BoxedFilter<(WithStatus<Json>,)> {
-        let v0_base = warp::path("v0");
-
-        let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, self.rev));
-        let v0 = v0_base.and(v0_rev);
-        let catch_all = make_api_catch_all();
-
-        v0.or(catch_all).unify().boxed()
     }
 }
 

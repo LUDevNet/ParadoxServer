@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use api::{ApiFactory, ApiService};
+use api::ApiService;
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
 use auth::Authorize;
@@ -154,11 +154,9 @@ async fn main() -> color_eyre::Result<()> {
 
     let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
     let pack = api::files::PackService::new(res_path, pki_path.as_deref())?;
-    let api_routes = ApiFactory { tydb, rev }.make_api();
     let api = warp::path("api").and(
         fallback_routes
             .or(file_routes)
-            .or(api_routes)
             .with(warp::compression::gzip()),
     );
     let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri, tydb, rev);

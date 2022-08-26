@@ -7,16 +7,10 @@ use super::PercentDecoded;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::{
-    convert::Infallible,
     io, str,
     task::{Context, Poll},
 };
 use tower::Service;
-use warp::{
-    filters::BoxedFilter,
-    reply::{Json, WithStatus},
-    Filter,
-};
 
 mod common;
 mod data;
@@ -32,7 +26,7 @@ pub use data::ReverseLookup;
 
 use crate::data::locale::LocaleRoot;
 
-use super::{adapter::BTreeMapKeysAdapter, tydb_filter};
+use super::adapter::BTreeMapKeysAdapter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -53,30 +47,6 @@ static REV_APIS: &[&str; 8] = &[
     "skill_ids",
 ];
 
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct Rev<'a> {
-    inner: &'a ReverseLookup,
-}
-
-fn rev_filter<'a>(
-    inner: &'a ReverseLookup,
-) -> impl Filter<Extract = (Rev,), Error = Infallible> + Clone + 'a {
-    warp::any().map(move || Rev { inner })
-}
-
-type Ext = (&'static TypedDatabase<'static>, Rev<'static>);
-
-pub(super) fn make_api_rev(
-    db: &'static TypedDatabase<'static>,
-    rev: &'static ReverseLookup,
-) -> BoxedFilter<(WithStatus<Json>,)> {
-    let db = tydb_filter(db);
-    let rev = db.and(rev_filter(rev));
-
-    let rev_skills = skills::skill_api(&rev);
-    rev_skills.boxed()
-}
-
 #[derive(Debug)]
 pub(super) enum Route {
     Base,
@@ -94,6 +64,7 @@ pub(super) enum Route {
     ObjectsSearchIndex,
     ObjectTypes,
     ObjectTypeByName(PercentDecoded),
+    SkillById(i32),
 }
 
 impl Route {
@@ -236,6 +207,20 @@ impl Route {
                     Err(_) => Err(()),
                 },
             },
+            Some("skill_ids" | "skills") => match parts.next() {
+                Some(key) => match key.parse() {
+                    Ok(id) => match parts.next() {
+                        None => Ok(Self::SkillById(id)),
+                        Some("") => match parts.next() {
+                            None => Ok(Self::SkillById(id)),
+                            Some(_) => Err(()),
+                        },
+                        Some(_) => Err(()),
+                    },
+                    Err(_) => Err(()),
+                },
+                None => Err(()),
+            },
             Some("") => match parts.next() {
                 None => Ok(Self::Base),
                 _ => Err(()),
@@ -307,6 +292,9 @@ impl Service<(super::Accept, Route)> for RevService {
             }
             Route::ObjectTypeByName(ty) => {
                 super::reply(a, &object_types::rev_object_type(self.db, self.rev, ty))
+            }
+            Route::SkillById(skill_id) => {
+                super::reply(a, &skills::rev_skill_id(self.db, self.rev, skill_id))
             }
         };
         std::future::ready(r)
