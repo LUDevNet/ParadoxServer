@@ -4,6 +4,8 @@ mod router;
 pub use router::BaseRouter;
 mod public;
 pub use public::PublicOr;
+mod fallback;
+pub use fallback::FallbackService;
 
 #[derive(Debug)]
 pub enum Error {

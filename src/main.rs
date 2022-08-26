@@ -13,22 +13,22 @@ use auth::Authorize;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
+use data::fs::make_file_filter;
+use http::Uri;
 use hyper::server::Server;
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
-use services::BaseRouter;
+use services::{BaseRouter, FallbackService};
 use tokio::runtime::Handle;
 use tower::{make::Shared, ServiceBuilder};
 use tower_http::{auth::RequireAuthorization, services::ServeDir};
 use tracing::log::LevelFilter;
-use warp::{hyper::Uri, Filter};
 
 mod api;
 mod auth;
 mod config;
 mod data;
-mod fallback;
 mod redirect;
 mod services;
 mod template;
@@ -38,7 +38,6 @@ use crate::{
     auth::AuthKind,
     config::AuthConfig,
     data::{fs::LuRes, locale::LocaleRoot},
-    fallback::make_fallback,
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
 
@@ -109,19 +108,21 @@ async fn main() -> color_eyre::Result<()> {
     // }
 
     // Make the API
-    let lu_json_path = cfg.data.lu_json_cache.clone();
-    let fallback_routes = make_fallback(lu_json_path);
+    let lu_json_path = cfg.data.lu_json_cache.as_path();
+
+    // The 'new' fallback service
+    let fallback = FallbackService::new(lu_json_path);
 
     let res_path = cfg
         .data
         .res
         .as_deref()
         .unwrap_or_else(|| Path::new("client/res"));
-    let pki_path = cfg.data.versions.as_ref().map(|x| x.join("primary.pki"));
 
-    let file_routes = warp::path("v1")
-        .and(warp::path("res"))
-        .and(data::fs::make_file_filter(res_path));
+    // v1/res
+    let file_api = make_file_filter(res_path);
+
+    let pki_path = cfg.data.versions.as_ref().map(|x| x.join("primary.pki"));
 
     let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_), .. })) {
         AuthKind::Basic
@@ -133,11 +134,6 @@ async fn main() -> color_eyre::Result<()> {
 
     let openapi = api::docs::OpenApiService::new(&api_url, auth_kind)?;
     let pack = api::files::PackService::new(res_path, pki_path.as_deref())?;
-    let api = warp::path("api").and(
-        fallback_routes
-            .or(file_routes)
-            .with(warp::compression::gzip()),
-    );
     let api = ApiService::new(db, lr.clone(), pack, openapi, api_uri, tydb, rev);
 
     let spa_path = &cfg.data.explorer_spa;
@@ -171,7 +167,7 @@ async fn main() -> color_eyre::Result<()> {
     let res = ServeDir::new(&cfg.data.lu_res_cache);
 
     // Finally collect all routes
-    let routes = BaseRouter::new(api, spa, res);
+    let routes = BaseRouter::new(api, spa, res, fallback);
     let protected = RequireAuthorization::custom(routes, Authorize::new(&cfg.auth));
     let public = services::PublicOr::new(protected, &cfg.data.public);
     let public = redirect::RedirectService::new(public, &cfg);
