@@ -26,7 +26,7 @@ pub use data::ReverseLookup;
 
 use crate::data::locale::LocaleRoot;
 
-use super::adapter::BTreeMapKeysAdapter;
+use super::adapter::Keys;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -268,7 +268,7 @@ impl Service<(super::Accept, Route)> for RevService {
     fn call(&mut self, (a, route): (super::Accept, Route)) -> Self::Future {
         let r = match route {
             Route::Base => super::reply_json(&REV_APIS),
-            Route::Activities => super::reply(a, &BTreeMapKeysAdapter::new(&self.rev.activities)),
+            Route::Activities => super::reply(a, &Keys::new(&self.rev.activities)),
             Route::ActivityById(id) => super::reply_opt(a, self.rev.activities.get(&id)),
             Route::BehaviorById(id) => super::reply(a, &behaviors::lookup(self.db, self.rev, id)),
             Route::ComponentTypes => super::reply(a, &component_types::Components::new(self.rev)),
@@ -295,9 +295,7 @@ impl Service<(super::Accept, Route)> for RevService {
                 &missions::rev_mission_subtype(self.db, self.rev, &self.loc, d_type, d_subtype),
             ),
             Route::ObjectsSearchIndex => super::reply(a, &self.rev.objects.search_index),
-            Route::ObjectTypes => {
-                super::reply(a, &BTreeMapKeysAdapter::new(&self.rev.object_types))
-            }
+            Route::ObjectTypes => super::reply(a, &Keys::new(&self.rev.object_types)),
             Route::ObjectTypeByName(ty) => {
                 super::reply(a, &object_types::rev_object_type(self.db, self.rev, ty))
             }

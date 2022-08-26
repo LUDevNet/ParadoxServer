@@ -1,13 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::iter::Copied;
 use std::slice::Iter;
 
 use assembly_xml::localization::LocaleNode;
 use paradox_typed_db::TypedRow;
-use serde::{
-    ser::{SerializeMap, SerializeSeq},
-    Serialize,
-};
+use serde::{ser::SerializeMap, Serialize};
 
 pub(crate) trait FindHash {
     fn find_hash(&self, v: i32) -> Option<i32>;
@@ -172,25 +169,31 @@ impl<'a> Serialize for LocaleTableAdapter<'a> {
     }
 }
 
-pub(crate) struct BTreeMapKeysAdapter<'a, K, V> {
-    inner: &'a BTreeMap<K, V>,
+/// [Serialize] adapter that serializes a map as the sequence of its keys
+pub(crate) struct Keys<M> {
+    inner: M,
 }
 
-impl<'a, K, V> BTreeMapKeysAdapter<'a, K, V> {
-    pub fn new(inner: &'a BTreeMap<K, V>) -> Self {
+impl<M> Keys<M> {
+    pub fn new(inner: M) -> Self {
         Self { inner }
     }
 }
 
-impl<'a, K: Serialize, V> Serialize for BTreeMapKeysAdapter<'a, K, V> {
+impl<'a, K: Serialize, V> Serialize for Keys<&'a BTreeMap<K, V>> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut s = serializer.serialize_seq(Some(self.inner.len()))?;
-        for key in self.inner.keys() {
-            s.serialize_element(key)?;
-        }
-        s.end()
+        serializer.collect_seq(self.inner.keys())
+    }
+}
+
+impl<'a, K: Serialize, V> Serialize for Keys<&'a HashMap<K, V>> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.inner.keys())
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 
@@ -6,17 +8,17 @@ use super::{
     data::{ComponentUse, ComponentsUse, ReverseLookup},
     Api,
 };
-use crate::api::adapter::BTreeMapKeysAdapter;
+use crate::api::adapter::Keys;
 
 #[derive(Serialize)]
 pub(super) struct Components<'a> {
-    components: BTreeMapKeysAdapter<'a, i32, ComponentsUse>,
+    components: Keys<&'a BTreeMap<i32, ComponentsUse>>,
 }
 
 impl<'a> Components<'a> {
     pub fn new(rev: &'a ReverseLookup) -> Self {
         Self {
-            components: BTreeMapKeysAdapter::new(&rev.component_use),
+            components: Keys::new(&rev.component_use),
         }
     }
 }

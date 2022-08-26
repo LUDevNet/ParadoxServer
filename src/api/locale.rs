@@ -6,7 +6,7 @@ use serde::{
     Serialize,
 };
 
-use super::adapter::BTreeMapKeysAdapter;
+use super::adapter::Keys;
 
 #[derive(Debug)]
 pub(super) struct Pod<'a> {
@@ -26,14 +26,8 @@ impl<'a> Serialize for Pod<'a> {
     {
         let mut m = serializer.serialize_struct("LocaleNode", 3)?;
         m.serialize_field("value", &self.inner.value)?;
-        m.serialize_field(
-            "int_keys",
-            &BTreeMapKeysAdapter::new(&self.inner.int_children),
-        )?;
-        m.serialize_field(
-            "str_keys",
-            &BTreeMapKeysAdapter::new(&self.inner.str_children),
-        )?;
+        m.serialize_field("int_keys", &Keys::new(&self.inner.int_children))?;
+        m.serialize_field("str_keys", &Keys::new(&self.inner.str_children))?;
         m.end()
     }
 }
