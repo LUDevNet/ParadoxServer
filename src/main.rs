@@ -1,6 +1,5 @@
 use std::{
     fs::File,
-    io,
     net::SocketAddr,
     path::Path,
     str::FromStr,
@@ -14,12 +13,7 @@ use auth::Authorize;
 use clap::Parser;
 use color_eyre::eyre::WrapErr;
 use config::{Config, Options};
-use http::Response;
-use http_body::combinators::UnsyncBoxBody;
-use hyper::{
-    body::{Bytes, HttpBody},
-    server::Server,
-};
+use hyper::server::Server;
 use mapr::Mmap;
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 use paradox_typed_db::TypedDatabase;
@@ -47,21 +41,6 @@ use crate::{
     fallback::make_fallback,
     template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
 };
-
-fn new_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, error)
-}
-
-fn response_to_boxed_error_io<B: http_body::Body<Data = Bytes> + Send + 'static>(
-    r: Response<B>,
-) -> Response<ResponseBody>
-where
-    B::Error: std::error::Error + Send + Sync + 'static,
-{
-    r.map(|b| HttpBody::map_err(b, new_io_error).boxed_unsync())
-}
-
-type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
