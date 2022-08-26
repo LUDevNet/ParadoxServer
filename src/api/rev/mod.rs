@@ -142,41 +142,10 @@ impl Route {
                 Some(_) => Err(()),
                 None => Err(()),
             },
-            Some("mission-types") => match parts.next() {
-                None => Ok(Self::MissionTypes),
-                Some("") => match parts.next() {
-                    None => Ok(Self::MissionTypes),
-                    Some(_) => Err(()),
-                },
-                Some("full") => match parts.next() {
-                    None => Ok(Self::MissionTypesFull),
-                    Some("") => match parts.next() {
-                        None => Ok(Self::MissionTypesFull),
-                        Some(_) => Err(()),
-                    },
-                    Some(_) => Err(()),
-                },
-                Some(key) => match key.parse() {
-                    Ok(d_type) => match parts.next() {
-                        None => Ok(Self::MissionTypeByTy(d_type)),
-                        Some("") => match parts.next() {
-                            None => Ok(Self::MissionTypeByTy(d_type)),
-                            Some(_) => Err(()),
-                        },
-                        Some(key2) => match key2.parse() {
-                            Ok(d_subtype) => match parts.next() {
-                                None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
-                                Some("") => match parts.next() {
-                                    None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
-                                    Some(_) => Err(()),
-                                },
-                                Some(_) => Err(()),
-                            },
-                            Err(_) => Err(()),
-                        },
-                    },
-                    Err(_) => Err(()),
-                },
+            Some("mission_types" | "mission-types") => Self::mission_types_from_parts(parts),
+            Some("missions") => match parts.next() {
+                Some("types") => Self::mission_types_from_parts(parts),
+                _ => Err(()),
             },
             Some("objects") => match parts.next() {
                 Some("search_index" | "search-index") => match parts.next() {
@@ -227,6 +196,45 @@ impl Route {
             },
             None => Ok(Self::Base),
             _ => Err(()),
+        }
+    }
+
+    fn mission_types_from_parts(mut parts: str::Split<char>) -> Result<Route, ()> {
+        match parts.next() {
+            None => Ok(Self::MissionTypes),
+            Some("") => match parts.next() {
+                None => Ok(Self::MissionTypes),
+                Some(_) => Err(()),
+            },
+            Some("full") => match parts.next() {
+                None => Ok(Self::MissionTypesFull),
+                Some("") => match parts.next() {
+                    None => Ok(Self::MissionTypesFull),
+                    Some(_) => Err(()),
+                },
+                Some(_) => Err(()),
+            },
+            Some(key) => match key.parse() {
+                Ok(d_type) => match parts.next() {
+                    None => Ok(Self::MissionTypeByTy(d_type)),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::MissionTypeByTy(d_type)),
+                        Some(_) => Err(()),
+                    },
+                    Some(key2) => match key2.parse() {
+                        Ok(d_subtype) => match parts.next() {
+                            None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
+                            Some("") => match parts.next() {
+                                None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
+                                Some(_) => Err(()),
+                            },
+                            Some(_) => Err(()),
+                        },
+                        Err(_) => Err(()),
+                    },
+                },
+                Err(_) => Err(()),
+            },
         }
     }
 }
