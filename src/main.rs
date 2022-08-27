@@ -9,7 +9,7 @@ use crate::{
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
 use clap::Parser;
-use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{eyre, WrapErr};
 use hyper::server::Server;
 use mapr::Mmap;
 use middleware::CorsLayerExt;
@@ -97,17 +97,19 @@ async fn main() -> color_eyre::Result<()> {
         .service(BaseRouter::new(api, app, res, api_fallback));
 
     // FIXME: TLS
-    /*if let Some(tls_cfg) = cfg.tls {
+    if let Some(tls_cfg) = cfg.tls {
         if tls_cfg.enabled {
-            server
-                .tls()
-                .key_path(tls_cfg.key)
-                .cert_path(tls_cfg.cert)
-                .run((ip, cfg.general.port))
-                .await;
-            return Ok(());
+            /*server
+            .tls()
+            .key_path(tls_cfg.key)
+            .cert_path(tls_cfg.cert)
+            .run((ip, cfg.general.port))
+            .await;*/
+            return Err(eyre!(
+                "TLS support is currently unavailable, please use a proxy such as nginx or apache"
+            ));
         }
-    }*/
+    }
 
     // Finally, run the server
     Server::bind(&cfg.general.addr())
