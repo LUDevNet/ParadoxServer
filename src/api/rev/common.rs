@@ -20,24 +20,27 @@ pub struct MapFilter<'a, E> {
     keys: &'a [i32],
 }
 
-#[derive(Clone)]
-pub struct ObjectsRefAdapter<'a, 'b> {
-    table: &'b ObjectsTable<'a>,
-    keys: &'b [i32],
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
 struct ObjectRefData<'a> {
     name: &'a Latin1Str,
 }
 
-impl<'a, 'b> ObjectsRefAdapter<'a, 'b> {
-    pub fn new(table: &'b ObjectsTable<'a>, keys: &'b [i32]) -> Self {
+#[derive(Clone)]
+pub struct ObjectsRefAdapter<'a, 'b, K> {
+    table: &'b ObjectsTable<'a>,
+    keys: K,
+}
+
+impl<'a, 'b, K> ObjectsRefAdapter<'a, 'b, K> {
+    pub fn new(table: &'b ObjectsTable<'a>, keys: K) -> Self {
         Self { table, keys }
     }
 }
 
-impl<'a, 'b> serde::Serialize for ObjectsRefAdapter<'a, 'b> {
+impl<'a, 'b, K> serde::Serialize for ObjectsRefAdapter<'a, 'b, K>
+where
+    K: AsRef<[i32]>,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -46,7 +49,7 @@ impl<'a, 'b> serde::Serialize for ObjectsRefAdapter<'a, 'b> {
         serializer.collect_map(
             TableMultiIter {
                 index: IdentityHash,
-                key_iter: self.keys.iter().copied(),
+                key_iter: self.keys.as_ref().iter().copied(),
                 table: self.table,
                 id_col,
             }
@@ -56,8 +59,11 @@ impl<'a, 'b> serde::Serialize for ObjectsRefAdapter<'a, 'b> {
 }
 
 #[derive(Serialize)]
-pub(super) struct ObjectTypeEmbedded<'a, 'b> {
-    pub objects: ObjectsRefAdapter<'a, 'b>,
+pub(super) struct ObjectTypeEmbedded<'a, 'b, K>
+where
+    K: AsRef<[i32]>,
+{
+    pub objects: ObjectsRefAdapter<'a, 'b, K>,
 }
 
 impl<'a, E> MapFilter<'a, E> {

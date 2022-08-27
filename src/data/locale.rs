@@ -9,8 +9,10 @@ pub struct LocaleRoot {
 }
 
 impl LocaleRoot {
-    pub fn new(root: Arc<LocaleNode>) -> Self {
-        Self { root }
+    pub fn new(root_node: LocaleNode) -> Self {
+        Self {
+            root: Arc::new(root_node),
+        }
     }
 
     pub fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {

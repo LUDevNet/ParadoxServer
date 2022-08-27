@@ -1,35 +1,46 @@
 use std::{
     borrow::Borrow,
-    convert::Infallible,
-    error::Error,
+    future::{ready, Ready},
+    io,
     path::Path,
-    str::{FromStr, Utf8Error},
-    sync::Arc,
+    str::{FromStr, Split, Utf8Error},
+    task::{self, Poll},
 };
 
+use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
-use assembly_xml::localization::LocaleNode;
+use futures_util::{future::BoxFuture, Future, FutureExt};
+use http::{
+    header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
+    HeaderValue, Request, Response, StatusCode, Uri,
+};
+use hyper::body::Bytes;
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
-use warp::{
-    filters::BoxedFilter,
-    path::Tail,
-    reply::{Json, WithStatus},
-    Filter, Reply,
+use pin_project::pin_project;
+use serde::Serialize;
+use tower::Service;
+
+use crate::{
+    auth::AuthKind,
+    config::DataOptions,
+    data::{
+        fs::{spawn_handler, EventSender},
+        locale::LocaleRoot,
+    },
+    services::router,
 };
 
-use crate::{auth::AuthKind, data::locale::LocaleRoot};
-
 use self::{
-    adapter::{LocaleAll, LocalePod},
-    files::make_crc_lookup_filter,
-    rev::{make_api_rev, ReverseLookup},
-    tables::{make_api_tables, tables_api},
+    docs::OpenApiService,
+    files::PackService,
+    rev::{RevService, ReverseLookup},
 };
 
 pub mod adapter;
-mod docs;
-mod files;
+pub mod docs;
+pub mod files;
+mod locale;
 pub mod rev;
 pub mod tables;
 
@@ -58,152 +69,355 @@ impl ToString for PercentDecoded {
     }
 }
 
-fn map_res<E: Error>(v: Result<Json, E>) -> WithStatus<Json> {
-    match v {
-        Ok(res) => wrap_200(res),
-        Err(e) => wrap_500(warp::reply::json(&e.to_string())),
+#[derive(Debug)]
+enum ApiRoute<'r> {
+    Tables,
+    TableByName(&'r str),
+    AllTableRows(&'r str),
+    TableRowsByPK(&'r str, &'r str),
+    Locale(Split<'r, char>),
+    Crc(u32),
+    Rev(rev::Route),
+    OpenApiV0,
+    SwaggerUI,
+    SwaggerUIRedirect,
+    Res(Split<'r, char>),
+}
+
+impl<'r> ApiRoute<'r> {
+    fn v0(mut parts: Split<'r, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some("tables") => match parts.next() {
+                None => Ok(Self::Tables),
+                Some(name) => match parts.next() {
+                    None => Ok(Self::TableByName(name)),
+                    Some("def") => match parts.next() {
+                        None => Ok(Self::TableByName(name)),
+                        _ => Err(()),
+                    },
+                    Some("all") => match parts.next() {
+                        None => Ok(Self::AllTableRows(name)),
+                        _ => Err(()),
+                    },
+                    Some(key) => match parts.next() {
+                        None => Ok(Self::TableRowsByPK(name, key)),
+                        _ => Err(()),
+                    },
+                },
+            },
+            Some("locale") => Ok(Self::Locale(parts)),
+            Some("rev") => rev::Route::from_parts(parts).map(ApiRoute::Rev),
+            Some("crc") => match parts.next() {
+                Some(crc) => match crc.parse() {
+                    Ok(crc) => Ok(Self::Crc(crc)),
+                    _ => Err(()),
+                },
+                _ => Err(()),
+            },
+            Some("openapi.json") => match parts.next() {
+                None => Ok(Self::OpenApiV0),
+                _ => Err(()),
+            },
+            _ => Err(()),
+        }
+    }
+
+    fn v1(mut parts: Split<'r, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some("tables") => match parts.next() {
+                None => Ok(Self::Tables),
+                _ => Err(()),
+            },
+            Some("res") => Ok(Self::Res(parts)),
+            _ => Err(()),
+        }
+    }
+
+    fn from_str(s: &'r str) -> Result<Self, ()> {
+        if s.is_empty() {
+            return Ok(Self::SwaggerUIRedirect);
+        }
+        let mut parts = s.trim_start_matches('/').split('/');
+        match parts.next() {
+            Some("v0") => Self::v0(parts),
+            Some("v1") => Self::v1(parts),
+            Some("") => match parts.next() {
+                None => Ok(Self::SwaggerUI),
+                _ => Err(()),
+            },
+            _ => Err(()),
+        }
     }
 }
 
-fn map_opt_res<E: Error>(v: Result<Option<Json>, E>) -> WithStatus<Json> {
-    match v {
-        Ok(Some(res)) => wrap_200(res),
-        Ok(None) => wrap_404(warp::reply::json(&())),
-        Err(e) => wrap_500(warp::reply::json(&e.to_string())),
+enum Accept {
+    Json,
+    Yaml,
+}
+
+fn into_other_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, error)
+}
+
+fn reply_static(body: &'static str) -> http::Response<hyper::Body> {
+    let mut r = Response::new(hyper::Body::from(body));
+    r.headers_mut()
+        .append(CONTENT_LENGTH, HeaderValue::from(body.len()));
+    r.headers_mut().append(CONTENT_TYPE, TEXT_HTML);
+    r
+}
+
+fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
+    let is_404 = body == "null";
+    let content_length = HeaderValue::from(body.len());
+    let mut r = Response::new(hyper::Body::from(body));
+
+    if is_404 {
+        // FIXME: hack; handle T = Option<U> for 404 properly
+        *r.status_mut() = http::StatusCode::NOT_FOUND;
+    }
+    r.headers_mut().append(CONTENT_LENGTH, content_length);
+    r.headers_mut().append(CONTENT_TYPE, content_type);
+    r
+}
+
+fn reply_opt<T: Serialize>(
+    accept: Accept,
+    v: Option<&T>,
+) -> Result<http::Response<hyper::Body>, io::Error> {
+    v.map(|v| reply(accept, v))
+        .unwrap_or_else(|| Ok(reply_404()))
+}
+
+fn reply<T: Serialize>(accept: Accept, v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    match accept {
+        Accept::Json => reply_json(v),
+        Accept::Yaml => reply_yaml(v),
     }
 }
 
-fn map_opt(v: Option<Json>) -> WithStatus<Json> {
-    match v {
-        Some(res) => wrap_200(res),
-        None => wrap_404(warp::reply::json(&())),
+fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    let body = serde_json::to_string(&v).map_err(into_other_io_error)?;
+    Ok(reply_string(body, APPLICATION_JSON))
+}
+
+fn reply_yaml<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, io::Error> {
+    let body = serde_yaml::to_string(&v).map_err(into_other_io_error)?;
+    Ok(reply_string(body, APPLICATION_YAML))
+}
+
+fn reply_404() -> http::Response<hyper::Body> {
+    let mut r = Response::new(hyper::Body::from("404"));
+    *r.status_mut() = http::StatusCode::NOT_FOUND;
+
+    let content_length = HeaderValue::from(3);
+    r.headers_mut().append(CONTENT_LENGTH, content_length);
+    r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
+    r
+}
+
+#[derive(Clone)]
+pub struct ApiService {
+    pub db: Database<'static>,
+    pub locale_root: LocaleRoot,
+    pub openapi: OpenApiService,
+    pack: files::PackService,
+    api_url: HeaderValue,
+    rev: rev::RevService,
+    res: EventSender,
+}
+
+#[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
+const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");
+#[allow(clippy::declare_interior_mutable_const)]
+const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml; charset=utf-8");
+#[allow(clippy::declare_interior_mutable_const)]
+const TEXT_HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
+
+impl ApiService {
+    #[allow(clippy::too_many_arguments)] // FIXME
+    pub(crate) fn new(
+        db: Database<'static>,
+        locale_root: LocaleRoot,
+        pack: PackService,
+        openapi: OpenApiService,
+        api_uri: Uri,
+        tydb: &'static TypedDatabase,
+        rev: &'static ReverseLookup,
+        res_path: &Path,
+    ) -> Self {
+        let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
+        Self {
+            pack,
+            db,
+            locale_root: locale_root.clone(),
+            openapi,
+            api_url,
+            res: spawn_handler(res_path),
+            rev: RevService::new(tydb, locale_root, rev),
+        }
     }
-}
 
-fn wrap_404<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::NOT_FOUND)
-}
+    fn db_api<T: Serialize>(
+        &self,
+        accept: Accept,
+        f: impl FnOnce(Database<'static>) -> Result<T, CastError>,
+    ) -> Result<Response<hyper::Body>, io::Error> {
+        let v = f(self.db).map_err(into_other_io_error)?;
+        match accept {
+            Accept::Json => reply_json(&v),
+            Accept::Yaml => reply_yaml(&v),
+        }
+    }
 
-pub fn wrap_200<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::OK)
-}
+    /// Get data from `locale.xml`
+    fn locale(
+        &self,
+        accept: Accept,
+        rest: Split<char>,
+    ) -> Result<Response<hyper::Body>, io::Error> {
+        match locale::select_node(self.locale_root.root.as_ref(), rest) {
+            Some((node, locale::Mode::All)) => reply(accept, &locale::All::new(node)),
+            Some((node, locale::Mode::Pod)) => reply(accept, &locale::Pod::new(node)),
+            None => Ok(reply_404()),
+        }
+    }
 
-pub fn wrap_500<A: Reply>(reply: A) -> WithStatus<A> {
-    warp::reply::with_status(reply, warp::http::StatusCode::INTERNAL_SERVER_ERROR)
-}
+    fn swagger_ui_redirect(&self) -> Result<http::Response<hyper::Body>, io::Error> {
+        let mut r = http::Response::new(hyper::Body::empty());
+        *r.status_mut() = StatusCode::PERMANENT_REDIRECT;
+        r.headers_mut().append(LOCATION, self.api_url.clone());
+        Ok(r)
+    }
 
-fn make_api_catch_all() -> impl Filter<Extract = (WithStatus<Json>,), Error = Infallible> + Clone {
-    warp::any().map(|| warp::reply::json(&404)).map(wrap_404)
-}
-
-/*fn copy_filter<'x, T>(v: T) -> impl Filter<Extract = (T,), Error=Infallible> + Clone + 'x where T: Send + Sync + Copy + 'x {
-    warp::any().map(move || v)
-}*/
-
-fn db_filter<'db>(
-    db: Database<'db>,
-) -> impl Filter<Extract = (Database,), Error = Infallible> + Clone + 'db {
-    warp::any().map(move || db)
-}
-
-fn tydb_filter<'db>(
-    db: &'db TypedDatabase<'db>,
-) -> impl Filter<Extract = (&'db TypedDatabase<'db>,), Error = Infallible> + Clone + 'db {
-    warp::any().map(move || db)
-}
-
-pub fn locale_api(lr: Arc<LocaleNode>) -> impl Fn(Tail) -> Option<warp::reply::Json> + Clone {
-    move |p: Tail| {
-        let path = p.as_str().trim_end_matches('/');
-        let mut node = lr.as_ref();
-        let mut all = false;
-        if !path.is_empty() {
-            let path = match path.strip_suffix("/$all") {
-                Some(prefix) => {
-                    all = true;
-                    prefix
-                }
-                None => path,
-            };
-
-            // Skip loop for root node
-            for seg in path.split('/') {
-                if let Some(new) = {
-                    if let Ok(num) = seg.parse::<u32>() {
-                        node.int_children.get(&num)
-                    } else {
-                        node.str_children.get(seg)
-                    }
-                } {
-                    node = new;
-                } else {
-                    return None;
+    fn res_request(
+        &self,
+        accept: Accept,
+        rest: Split<char>,
+    ) -> ApiFuture<Result<Response<hyper::Body>, io::Error>> {
+        ApiFuture::boxed({
+            let sender = self.res.clone();
+            let mut bytes = Vec::new();
+            for part in rest {
+                bytes.push(b'\\');
+                bytes.extend_from_slice(part.as_bytes());
+            }
+            async move {
+                match sender.request(Bytes::from(bytes)).await {
+                    Ok(v) => reply(accept, &v),
+                    Err(()) => Ok(reply_404()),
                 }
             }
-        }
-        if all {
-            Some(warp::reply::json(&LocaleAll::new(node)))
-        } else {
-            Some(warp::reply::json(&LocalePod {
-                value: node.value.as_deref(),
-                int_keys: node.int_children.keys().cloned().collect(),
-                str_keys: node.str_children.keys().map(|s| s.as_ref()).collect(),
-            }))
+        })
+    }
+}
+
+const SWAGGER_UI_HTML: &str = include_str!("../../res/api.html");
+
+#[pin_project(project = ApiFutureProj)]
+pub enum ApiFuture<T> {
+    Ready(#[pin] Ready<T>),
+    Boxed(#[pin] BoxFuture<'static, T>),
+}
+
+impl<T> ApiFuture<T> {
+    pub fn ready(value: T) -> Self {
+        Self::Ready(ready(value))
+    }
+
+    pub fn boxed(f: impl Future<Output = T> + Send + 'static) -> Self {
+        Self::Boxed(f.boxed())
+    }
+}
+
+impl<T> std::future::Future for ApiFuture<T> {
+    type Output = T;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        match self.project() {
+            ApiFutureProj::Ready(f) => f.poll(cx),
+            ApiFutureProj::Boxed(f) => f.poll(cx),
         }
     }
 }
 
-pub(crate) struct ApiFactory<'a> {
-    pub url: String,
-    pub auth_kind: AuthKind,
-    pub db: Database<'static>,
-    pub tydb: &'static TypedDatabase<'static>,
-    pub rev: &'static ReverseLookup,
-    pub lr: Arc<LocaleNode>,
-    pub res_path: &'a Path,
-    pub pki_path: Option<&'a Path>,
+impl<ReqBody> Service<Request<ReqBody>> for ApiService {
+    type Error = io::Error;
+    type Response = Response<hyper::Body>;
+    type Future = ApiFuture<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    /// This is the main entry point to the API service.
+    ///
+    /// Here, we turn [ApiRoute]s into [http::Response]s
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let accept = match req.headers().get(ACCEPT) {
+            Some(s) if s == "application/yaml" => Accept::Yaml,
+            _ => Accept::Json,
+        };
+        let route = match ApiRoute::from_str(req.uri().path()) {
+            Ok(route) => {
+                tracing::info!("API Route: {:?}", route);
+                route
+            }
+            Err(()) => return ApiFuture::ready(Ok(reply_404())),
+        };
+        let response = match route {
+            ApiRoute::Tables => self.db_api(accept, tables::tables_json),
+            ApiRoute::TableByName(name) => {
+                self.db_api(accept, |db| tables::table_def_json(db, name))
+            }
+            ApiRoute::AllTableRows(name) => {
+                self.db_api(accept, |db| tables::table_all_json(db, name))
+            }
+            ApiRoute::TableRowsByPK(name, key) => {
+                self.db_api(accept, |db| tables::table_key_json(db, name, key))
+            }
+            ApiRoute::Locale(rest) => self.locale(accept, rest),
+            ApiRoute::OpenApiV0 => reply_json(self.openapi.as_ref()),
+            ApiRoute::SwaggerUI => Ok(reply_static(SWAGGER_UI_HTML)),
+            ApiRoute::SwaggerUIRedirect => self.swagger_ui_redirect(),
+            ApiRoute::Crc(crc) => reply(accept, &self.pack.lookup(crc)),
+            ApiRoute::Rev(route) => return ApiFuture::Ready(self.rev.call((accept, route))),
+            ApiRoute::Res(rest) => return self.res_request(accept, rest),
+        };
+        ApiFuture::ready(response)
+    }
 }
 
-impl<'a> ApiFactory<'a> {
-    pub(crate) fn make_api(self) -> BoxedFilter<(WithStatus<Json>,)> {
-        let loc = LocaleRoot::new(self.lr.clone());
+/// Make the API
+pub(crate) fn service(
+    cfg: &DataOptions,
+    locale_root: LocaleRoot,
+    auth_kind: AuthKind,
+    base_url: String,
+    db: Database<'static>,
+    tydb: &'static TypedDatabase<'static>,
+    rev: &'static ReverseLookup,
+) -> Result<ApiService, color_eyre::Report> {
+    // The pack service
+    let res_path = cfg
+        .res
+        .as_deref()
+        .unwrap_or_else(|| Path::new("client/res"));
+    let pki_path = cfg.versions.as_ref().map(|x| x.join("primary.pki"));
+    let pack = files::PackService::new(res_path, pki_path.as_deref())?;
 
-        let v0_base = warp::path("v0");
-        let v0_tables = warp::path("tables").and(make_api_tables(self.db));
-        let v0_locale = warp::path("locale")
-            .and(warp::path::tail())
-            .map(locale_api(self.lr))
-            .map(map_opt);
+    let api_url = base_url + router::API_PREFIX + "/";
+    let openapi = docs::OpenApiService::new(&api_url, auth_kind)?;
 
-        let v0_crc = warp::path("crc").and(make_crc_lookup_filter(self.res_path, self.pki_path));
-
-        let v0_rev = warp::path("rev").and(make_api_rev(self.tydb, loc, self.rev));
-        let v0_openapi = docs::openapi(self.url, self.auth_kind).unwrap();
-        let v0 = v0_base.and(
-            v0_tables
-                .or(v0_crc)
-                .unify()
-                .or(v0_locale)
-                .unify()
-                .or(v0_rev)
-                .unify()
-                .or(v0_openapi)
-                .unify(),
-        );
-
-        // v1
-        let dbf = db_filter(self.db);
-        let v1_base = warp::path("v1");
-        let v1_tables_base = dbf.and(warp::path("tables"));
-        let v1_tables = v1_tables_base
-            .and(warp::path::end())
-            .map(tables_api)
-            .map(map_res);
-        let v1 = v1_base.and(v1_tables);
-
-        // catch all
-        let catch_all = make_api_catch_all();
-
-        v0.or(v1).unify().or(catch_all).unify().boxed()
-    }
+    let api_uri = Uri::from_str(&api_url)?;
+    Ok(ApiService::new(
+        db,
+        locale_root,
+        pack,
+        openapi,
+        api_uri,
+        tydb,
+        rev,
+        res_path,
+    ))
 }
