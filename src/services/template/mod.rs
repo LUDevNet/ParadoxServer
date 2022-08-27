@@ -453,20 +453,20 @@ pub struct SpaDynamic {
     inner: RenderService,
     data: &'static TypedDatabase<'static>,
     default_img: &'static str,
-    loc: LocaleRoot,
+    locale_root: LocaleRoot,
     res: LuRes,
-    dom: &'static str,
+    base_url: &'static str,
 }
 
 impl SpaDynamic {
     pub fn new(
         data: &'static TypedDatabase<'static>,
-        loc: LocaleRoot,
+        locale_root: LocaleRoot,
         res: LuRes,
         hb: Arc<RwLock<Template>>,
-        domain: &str,
+        base_url: &str,
     ) -> Self {
-        let dom = Box::leak(domain.to_string().into_boxed_str()) as &str;
+        let base_url = Box::leak(base_url.to_string().into_boxed_str()) as &str;
 
         // Prepare the default image
         let default_img = res.to_res_href(Path::new(DEFAULT_IMG));
@@ -477,17 +477,17 @@ impl SpaDynamic {
         Self {
             inner,
             data,
-            loc,
+            locale_root,
             res,
             default_img,
-            dom,
+            base_url,
         }
     }
 
     fn meta<ReqBody>(&self, req: &http::Request<ReqBody>) -> Meta {
         let path = req.uri().path();
         if let Some(route) = SpaRoute::parse(path) {
-            route.to_meta(self.data, &self.loc, &self.res)
+            route.to_meta(self.data, &self.locale_root, &self.res)
         } else {
             Meta::default()
         }
@@ -539,7 +539,7 @@ where
                 .image
                 .map(Cow::Owned)
                 .unwrap_or(Cow::Borrowed(self.default_img)),
-            url: Cow::Owned(format!("https://{}{}", self.dom, full_path)),
+            url: Cow::Owned(self.base_url.to_string() + full_path),
         };
         SpaFuture {
             inner: self.inner.call(params),

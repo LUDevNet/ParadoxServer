@@ -112,12 +112,14 @@ impl GeneralOptions {
         SocketAddr::from((self.ip(), self.port))
     }
 
+    /// Get the canonical base URL (without a trailing slash)
     pub fn base_url(&self) -> String {
-        let scheme = self.scheme();
-        match self.base.as_deref() {
-            Some(b) => format!("{}://{}/{}", scheme, &self.domain, b),
-            None => format!("{}://{}", scheme, &self.domain),
+        let mut start = self.scheme().to_string() + "://" + &self.domain;
+        if let Some(b) = self.base.as_deref() {
+            start.push('/');
+            start.push_str(b);
         }
+        start
     }
 }
 

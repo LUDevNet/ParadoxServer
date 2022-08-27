@@ -39,15 +39,14 @@ pub fn cleanup_path(url: &Latin1Str) -> Option<PathBuf> {
 }
 
 #[derive(Debug, Clone)]
+/// Helper to get an usable http(s) URI from a client-relative path
 pub struct LuRes {
     prefix: String,
 }
 
 impl LuRes {
-    pub fn new(prefix: &str) -> Self {
-        Self {
-            prefix: prefix.to_owned(),
-        }
+    pub fn new(prefix: String) -> Self {
+        Self { prefix }
     }
 
     pub fn to_res_href(&self, path: &Path) -> String {

@@ -2,9 +2,9 @@ use crate::{
     api::rev::ReverseLookup,
     auth::{AuthKind, Authorize},
     config::{Config, Options},
-    data::{fs::LuRes, locale::LocaleRoot},
+    data::locale::LocaleRoot,
     middleware::{PublicOrLayer, RedirectLayer},
-    services::{router, BaseRouter, FallbackService},
+    services::{BaseRouter, FallbackService},
 };
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
@@ -17,7 +17,6 @@ use paradox_typed_db::TypedDatabase;
 use std::{
     fs::{self, File},
     path::Path,
-    sync::Arc,
 };
 use tower::{make::Shared, ServiceBuilder};
 use tower_http::{
@@ -64,44 +63,27 @@ async fn main() -> color_eyre::Result<()> {
     let db = load_db(&cfg.data.cdclient)?;
 
     // Load the locale
-    let locale_root = load_locale(&cfg.data.locale).context("Failed to load locale.xml")?;
-    let lr = Arc::new(locale_root);
+    let locale_root = load_locale(&cfg.data.locale)
+        .context("Failed to load locale.xml")
+        .map(LocaleRoot::new)?;
 
     // Load the typed database
     let tables = db.tables().unwrap();
-    let canonical_base_url = cfg.general.base_url();
-
-    let lu_res = cfg
-        .data
-        .lu_res_prefix
-        .clone()
-        .unwrap_or_else(|| format!("{}{}", canonical_base_url, router::RES_PREFIX));
-    let res = LuRes::new(&lu_res);
-
     let tydb = TypedDatabase::new(tables)?;
     let tydb = Box::leak(Box::new(tydb));
     let rev = Box::leak(Box::new(ReverseLookup::new(tydb)));
 
-    let api = api::service(
-        &cfg.data,
-        lr.clone(),
-        AuthKind::of(&cfg.auth),
-        canonical_base_url,
-        db,
-        tydb,
-        rev,
-    )?;
+    // Set up res connection
+    let base_url = cfg.general.base_url();
 
-    // The 'new' fallback service
-    let fallback = FallbackService::new(cfg.data.lu_json_cache.as_path());
+    // Initialize the Application
+    let app = services::app(&cfg.data, tydb, locale_root.clone(), &base_url)?;
 
-    let app = services::app(
-        &cfg.data.explorer_spa,
-        tydb,
-        LocaleRoot::new(lr),
-        res,
-        &cfg.general.domain,
-    )?;
+    // Initialize the Api
+    let auth_kind = AuthKind::of(&cfg.auth);
+    let api = api::service(&cfg.data, locale_root, auth_kind, base_url, db, tydb, rev)?;
+    // Unfortunately still need the API fallback
+    let api_fallback = FallbackService::new(cfg.data.lu_json_cache.as_path());
 
     // Initialize the lu-res cache
     let res = ServeDir::new(&cfg.data.lu_res_cache);
@@ -112,7 +94,7 @@ async fn main() -> color_eyre::Result<()> {
         .layer(RedirectLayer::new(&cfg))
         .layer(PublicOrLayer::new(&cfg.data.public))
         .layer(RequireAuthorizationLayer::custom(Authorize::new(&cfg.auth)))
-        .service(BaseRouter::new(api, app, res, fallback));
+        .service(BaseRouter::new(api, app, res, api_fallback));
 
     // FIXME: TLS
     /*if let Some(tls_cfg) = cfg.tls {

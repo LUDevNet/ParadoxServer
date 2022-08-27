@@ -4,13 +4,11 @@ use std::{
     io,
     path::Path,
     str::{FromStr, Split, Utf8Error},
-    sync::Arc,
     task::{self, Poll},
 };
 
 use assembly_core::buffer::CastError;
 use assembly_fdb::mem::Database;
-use assembly_xml::localization::LocaleNode;
 use futures_util::{future::BoxFuture, Future, FutureExt};
 use http::{
     header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, LOCATION},
@@ -30,6 +28,7 @@ use crate::{
         fs::{spawn_handler, EventSender},
         locale::LocaleRoot,
     },
+    services::router,
 };
 
 use self::{
@@ -220,7 +219,7 @@ fn reply_404() -> http::Response<hyper::Body> {
 #[derive(Clone)]
 pub struct ApiService {
     pub db: Database<'static>,
-    pub locale_root: Arc<LocaleNode>,
+    pub locale_root: LocaleRoot,
     pub openapi: OpenApiService,
     pack: files::PackService,
     api_url: HeaderValue,
@@ -239,7 +238,7 @@ impl ApiService {
     #[allow(clippy::too_many_arguments)] // FIXME
     pub(crate) fn new(
         db: Database<'static>,
-        locale_root: Arc<LocaleNode>,
+        locale_root: LocaleRoot,
         pack: PackService,
         openapi: OpenApiService,
         api_uri: Uri,
@@ -255,7 +254,7 @@ impl ApiService {
             openapi,
             api_url,
             res: spawn_handler(res_path),
-            rev: RevService::new(tydb, LocaleRoot { root: locale_root }, rev),
+            rev: RevService::new(tydb, locale_root, rev),
         }
     }
 
@@ -277,7 +276,7 @@ impl ApiService {
         accept: Accept,
         rest: Split<char>,
     ) -> Result<Response<hyper::Body>, io::Error> {
-        match locale::select_node(self.locale_root.as_ref(), rest) {
+        match locale::select_node(self.locale_root.root.as_ref(), rest) {
             Some((node, locale::Mode::All)) => reply(accept, &locale::All::new(node)),
             Some((node, locale::Mode::Pod)) => reply(accept, &locale::Pod::new(node)),
             None => Ok(reply_404()),
@@ -392,9 +391,9 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
 /// Make the API
 pub(crate) fn service(
     cfg: &DataOptions,
-    locale_root: Arc<LocaleNode>,
+    locale_root: LocaleRoot,
     auth_kind: AuthKind,
-    canonical_base_url: String,
+    base_url: String,
     db: Database<'static>,
     tydb: &'static TypedDatabase<'static>,
     rev: &'static ReverseLookup,
@@ -407,7 +406,7 @@ pub(crate) fn service(
     let pki_path = cfg.versions.as_ref().map(|x| x.join("primary.pki"));
     let pack = files::PackService::new(res_path, pki_path.as_deref())?;
 
-    let api_url = format!("{}/api/", canonical_base_url);
+    let api_url = base_url + router::API_PREFIX + "/";
     let openapi = docs::OpenApiService::new(&api_url, auth_kind)?;
 
     let api_uri = Uri::from_str(&api_url)?;

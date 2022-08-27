@@ -1,6 +1,5 @@
 use std::{
     fmt, io,
-    path::Path,
     sync::{Arc, RwLock},
 };
 
@@ -13,7 +12,10 @@ use tower_http::services::ServeDir;
 mod template;
 pub use template::SpaDynamic;
 
-use crate::data::{fs::LuRes, locale::LocaleRoot};
+use crate::{
+    config::DataOptions,
+    data::{fs::LuRes, locale::LocaleRoot},
+};
 
 #[derive(Debug)]
 pub enum Error {
@@ -52,12 +54,12 @@ impl fmt::Display for Error {
 }
 
 pub(crate) fn app(
-    spa_path: &Path,
+    cfg: &DataOptions,
     tydb: &'static TypedDatabase<'static>,
-    loc: LocaleRoot,
-    res: LuRes,
-    domain: &str,
+    locale_root: LocaleRoot,
+    base_url: &str,
 ) -> Result<ServeDir<SpaDynamic>, color_eyre::Report> {
+    let spa_path = &cfg.explorer_spa;
     let spa_index = spa_path.join("index.html");
 
     // Create handlebars registry
@@ -66,7 +68,12 @@ pub(crate) fn app(
     template::spawn_watcher(&spa_index, hb.clone())?;
 
     // Set up the application
-    let spa_dynamic = template::SpaDynamic::new(tydb, loc, res, hb, domain);
+    let res = LuRes::new(
+        cfg.lu_res_prefix
+            .clone()
+            .unwrap_or_else(|| base_url.to_string() + router::RES_PREFIX),
+    );
+    let spa_dynamic = template::SpaDynamic::new(tydb, locale_root, res, hb, base_url);
     Ok(ServeDir::new(spa_path)
         .append_index_html_on_directories(false)
         .fallback(spa_dynamic))
