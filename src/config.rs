@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use clap::Parser;
-use serde::Deserialize;
+use http::{header::InvalidHeaderValue, HeaderValue};
+use serde::{
+    de::{SeqAccess, Unexpected, Visitor},
+    Deserialize, Deserializer,
+};
 
 fn default_port() -> u16 {
     3030
@@ -19,11 +23,46 @@ fn default_public() -> PathBuf {
     PathBuf::from("public")
 }
 
+fn deserialize_header_value_vec<'de, D>(deserializer: D) -> Result<Vec<HeaderValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct TheVisitor;
+
+    impl<'de> Visitor<'de> for TheVisitor {
+        type Value = Vec<HeaderValue>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(formatter, "a sequence of header values")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut vector = Vec::new();
+            while let Some(src) = seq.next_element::<Cow<'de, str>>()? {
+                vector.push(HeaderValue::from_str(src.as_ref()).map_err(
+                    |_: InvalidHeaderValue| {
+                        <A::Error as serde::de::Error>::invalid_value(
+                            Unexpected::Str(src.as_ref()),
+                            &"only visible ASCII characters (32-127)",
+                        )
+                    },
+                )?);
+            }
+            Ok(vector)
+        }
+    }
+
+    deserializer.deserialize_seq(TheVisitor)
+}
+
 #[derive(Deserialize)]
 pub struct CorsOptions {
     pub all: bool,
-    #[serde(default)]
-    pub domains: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_header_value_vec")]
+    pub domains: Vec<HeaderValue>,
 }
 
 impl Default for CorsOptions {

@@ -11,7 +11,7 @@ use http::HeaderValue;
 use http::{header::LOCATION, uri::PathAndQuery};
 use hyper::{body::Bytes, StatusCode, Uri};
 use pin_project::pin_project;
-use tower::Service;
+use tower::{Layer, Service};
 
 use crate::config::Config;
 
@@ -45,14 +45,8 @@ struct RedirectCore {
     canonical_base: String,
 }
 
-#[derive(Clone)]
-pub struct RedirectService<S> {
-    inner: S,
-    core: Arc<RedirectCore>,
-}
-
-impl<S> RedirectService<S> {
-    pub fn new(inner: S, cfg: &Config) -> Self {
+impl RedirectCore {
+    pub fn new(cfg: &Config) -> Self {
         let canonical_domain = cfg.general.domain.clone();
         let canonical_base = cfg.general.base.clone().unwrap_or_default();
         let mut hosts = HashMap::with_capacity(cfg.host.len());
@@ -65,16 +59,41 @@ impl<S> RedirectService<S> {
                 },
             );
         }
-        let data = RedirectCore {
+        Self {
             hosts,
             canonical_domain,
             canonical_base,
-        };
-        Self {
-            inner,
-            core: Arc::new(data),
         }
     }
+}
+
+pub struct RedirectLayer {
+    core: Arc<RedirectCore>,
+}
+
+impl RedirectLayer {
+    pub fn new(cfg: &Config) -> Self {
+        Self {
+            core: Arc::new(RedirectCore::new(cfg)),
+        }
+    }
+}
+
+impl<S> Layer<S> for RedirectLayer {
+    type Service = Redirect<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Redirect {
+            inner,
+            core: self.core.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Redirect<S> {
+    inner: S,
+    core: Arc<RedirectCore>,
 }
 
 #[pin_project(project = RedirectFutureProj)]
@@ -97,7 +116,7 @@ where
     }
 }
 
-impl<B, S, ResBody> Service<http::Request<B>> for RedirectService<S>
+impl<B, S, ResBody> Service<http::Request<B>> for Redirect<S>
 where
     S: Service<http::Request<B>, Response = http::Response<ResBody>, Error = io::Error>,
     ResBody: Default,

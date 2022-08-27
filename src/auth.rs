@@ -17,6 +17,16 @@ pub enum AuthKind {
     Basic,
 }
 
+impl AuthKind {
+    pub fn of(cfg: &Option<AuthConfig>) -> Self {
+        if matches!(cfg, Some(AuthConfig { basic: Some(_), .. })) {
+            Self::Basic
+        } else {
+            Self::None
+        }
+    }
+}
+
 pub struct BasicCfg {
     allowed_credentials: HashSet<String>,
     allowed_bots: HashSet<String>,

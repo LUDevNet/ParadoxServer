@@ -1,6 +1,9 @@
 use color_eyre::eyre::Context;
 use http::{uri::PathAndQuery, Response};
-use notify::event::{AccessKind, AccessMode, EventKind, RemoveKind};
+use notify::{
+    event::{AccessKind, AccessMode, EventKind, RemoveKind},
+    recommended_watcher, RecursiveMode, Watcher,
+};
 use pin_project::pin_project;
 use std::{
     borrow::Cow,
@@ -128,6 +131,18 @@ pub(crate) fn load_meta_template(
         .write()
         .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire handlebars lock: {}", e))?;
     hb.set_text(tpl_str);
+    Ok(())
+}
+
+pub(crate) fn spawn_watcher(path: &Path, hb: Arc<RwLock<Template>>) -> Result<(), notify::Error> {
+    // Setup the watcher
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let eh = FsEventHandler::new(tx);
+    let mut watcher = recommended_watcher(eh)?;
+    watcher.watch(path, RecursiveMode::Recursive)?;
+
+    let rt = tokio::runtime::Handle::current();
+    rt.spawn(TemplateUpdateTask::new(rx, hb));
     Ok(())
 }
 

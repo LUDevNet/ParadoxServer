@@ -8,7 +8,7 @@ use futures_util::{future::BoxFuture, FutureExt};
 use http::{Request, Response, StatusCode};
 use http_body::combinators::UnsyncBoxBody;
 use hyper::body::{Bytes, HttpBody};
-use tower::Service;
+use tower::{Layer, Service};
 use tower_http::services::{fs::DefaultServeDirFallback, ServeDir};
 
 fn new_io_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> io::Error {
@@ -25,6 +25,24 @@ where
 }
 
 type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
+
+pub struct PublicOrLayer<P> {
+    path: P,
+}
+
+impl<P: AsRef<Path>> PublicOrLayer<P> {
+    pub fn new(path: P) -> Self {
+        Self { path }
+    }
+}
+
+impl<S, P: AsRef<Path>> Layer<S> for PublicOrLayer<P> {
+    type Service = PublicOr<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PublicOr::new(inner, &self.path)
+    }
+}
 
 #[derive(Clone)]
 pub struct PublicOr<I> {

@@ -72,16 +72,16 @@ where
 pub struct BaseRouter<A, P, S> {
     api: A,
     app: P,
-    assets: S,
+    res: S,
     fallback: FallbackService,
 }
 
 impl<A, P, S> BaseRouter<A, P, S> {
-    pub fn new(api: A, app: P, assets: S, fallback: FallbackService) -> Self {
+    pub fn new(api: A, app: P, res: S, fallback: FallbackService) -> Self {
         Self {
             api,
             app,
-            assets,
+            res,
             fallback,
         }
     }
@@ -112,7 +112,7 @@ where
                 if let Err(e) = poll {
                     return Poll::Ready(Err(e));
                 }
-                if let Poll::Ready(poll) = self.assets.poll_ready(cx) {
+                if let Poll::Ready(poll) = self.res.poll_ready(cx) {
                     if let Err(e) = poll {
                         return Poll::Ready(Err(e));
                     }
@@ -160,7 +160,7 @@ where
                     PathAndQuery::from_maybe_shared(Bytes::copy_from_slice(rest.as_bytes())).ok();
                 *uri = Uri::from_parts(parts).unwrap();
                 return self
-                    .assets
+                    .res
                     .call(req)
                     .map(|r: Result<S::Response, S::Error>| {
                         r.map(|r| r.map(BaseRouterResponseBody::Assets))

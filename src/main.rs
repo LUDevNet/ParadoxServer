@@ -1,3 +1,20 @@
+use crate::{
+    api::{rev::ReverseLookup, ApiService},
+    auth::{AuthKind, Authorize},
+    config::{Config, Options},
+    data::{fs::LuRes, locale::LocaleRoot},
+    redirect::RedirectLayer,
+    services::{BaseRouter, FallbackService, PublicOrLayer},
+    template::{load_meta_template, spawn_watcher},
+};
+use assembly_fdb::mem::Database;
+use assembly_xml::localization::load_locale;
+use clap::Parser;
+use color_eyre::eyre::WrapErr;
+use http::{header::AUTHORIZATION, Method, Uri};
+use hyper::server::Server;
+use mapr::Mmap;
+use paradox_typed_db::TypedDatabase;
 use std::{
     fs::File,
     net::SocketAddr,
@@ -5,23 +22,13 @@ use std::{
     str::FromStr,
     sync::{Arc, RwLock},
 };
-
-use api::ApiService;
-use assembly_fdb::mem::Database;
-use assembly_xml::localization::load_locale;
-use auth::Authorize;
-use clap::Parser;
-use color_eyre::eyre::WrapErr;
-use config::{Config, Options};
-use http::Uri;
-use hyper::server::Server;
-use mapr::Mmap;
-use notify::{recommended_watcher, RecursiveMode, Watcher};
-use paradox_typed_db::TypedDatabase;
-use services::{BaseRouter, FallbackService};
-use tokio::runtime::Handle;
 use tower::{make::Shared, ServiceBuilder};
-use tower_http::{auth::RequireAuthorization, services::ServeDir};
+use tower_http::{
+    auth::RequireAuthorizationLayer,
+    cors::{AllowOrigin, CorsLayer},
+    services::ServeDir,
+    trace::TraceLayer,
+};
 use tracing::log::LevelFilter;
 
 mod api;
@@ -31,14 +38,6 @@ mod data;
 mod redirect;
 mod services;
 mod template;
-
-use crate::{
-    api::rev::ReverseLookup,
-    auth::AuthKind,
-    config::AuthConfig,
-    data::{fs::LuRes, locale::LocaleRoot},
-    template::{load_meta_template, FsEventHandler, TemplateUpdateTask},
-};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -99,13 +98,6 @@ async fn main() -> color_eyre::Result<()> {
     let tydb = Box::leak(Box::new(tydb));
     let rev = Box::leak(Box::new(ReverseLookup::new(tydb)));
 
-    // Load the files
-    // let mut f = Folder::default();
-    // if let Some(res) = &cfg.data.res {
-    //     let mut loader = Loader::new();
-    //     f = loader.load_dir(res);
-    // }
-
     // Make the API
     let lu_json_path = cfg.data.lu_json_cache.as_path();
 
@@ -120,11 +112,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let pki_path = cfg.data.versions.as_ref().map(|x| x.join("primary.pki"));
 
-    let auth_kind = if matches!(cfg.auth, Some(AuthConfig { basic: Some(_), .. })) {
-        AuthKind::Basic
-    } else {
-        AuthKind::None
-    };
+    let auth_kind = AuthKind::of(&cfg.auth);
     let api_url = format!("{}/api/", canonical_base_url);
     let api_uri = Uri::from_str(&api_url).unwrap();
 
@@ -138,56 +126,37 @@ async fn main() -> color_eyre::Result<()> {
     // Create handlebars registry
     let hb = Arc::new(RwLock::new(template::Template::new()));
     load_meta_template(&hb, &spa_index)?;
-
-    // Setup the watcher
-    let (tx, rx) = tokio::sync::mpsc::channel(10);
-    let eh = FsEventHandler::new(tx);
-    let mut watcher = recommended_watcher(eh)?;
-    watcher.watch(&spa_index, RecursiveMode::Recursive).unwrap();
-
-    let rt = Handle::current();
-    rt.spawn(TemplateUpdateTask::new(rx, hb.clone()));
+    spawn_watcher(&spa_index, hb.clone())?;
 
     // Set up the application
-    let spa = ServeDir::new(spa_path)
+    let spa_dynamic =
+        template::SpaDynamic::new(tydb, LocaleRoot::new(lr), res, hb, &cfg.general.domain);
+    let app = ServeDir::new(spa_path)
         .append_index_html_on_directories(false)
-        .fallback(template::SpaDynamic::new(
-            tydb,
-            LocaleRoot::new(lr),
-            res,
-            hb,
-            &cfg.general.domain,
-        ));
+        .fallback(spa_dynamic);
 
     // Initialize the lu-res cache
     let res = ServeDir::new(&cfg.data.lu_res_cache);
 
-    // Finally collect all routes
-    let routes = BaseRouter::new(api, spa, res, fallback);
-    let protected = RequireAuthorization::custom(routes, Authorize::new(&cfg.auth));
-    let public = services::PublicOr::new(protected, &cfg.data.public);
-    let public = redirect::RedirectService::new(public, &cfg);
-
-    // FIXME: Log middleware
-    //let log = warp::log("paradox::routes");
-    //let routes = routes.with(log);
-
-    // FIXME: CORS middleware
-    /*let mut cors = warp::cors();
     let cors_cfg = &cfg.general.cors;
-    if cors_cfg.all {
-        cors = cors.allow_any_origin();
+    let allow_origin = if cors_cfg.all {
+        AllowOrigin::any()
     } else {
-        for key in &cors_cfg.domains {
-            cors = cors.allow_origin(key.as_ref());
-        }
-    }*/
+        AllowOrigin::list(cors_cfg.domains.clone())
+    };
 
-    /*cors = cors
-        .allow_methods(vec!["OPTIONS", "GET"])
-        .allow_headers(vec!["authorization"]);
-    let to_serve = routes.with(cors);*/
-    //let server = warp::serve(to_serve);
+    let service = ServiceBuilder::new()
+        .layer(TraceLayer::new_for_http())
+        .layer(
+            CorsLayer::new()
+                .allow_headers([AUTHORIZATION])
+                .allow_methods([Method::OPTIONS, Method::GET])
+                .allow_origin(allow_origin),
+        )
+        .layer(RedirectLayer::new(&cfg))
+        .layer(PublicOrLayer::new(&cfg.data.public))
+        .layer(RequireAuthorizationLayer::custom(Authorize::new(&cfg.auth)))
+        .service(BaseRouter::new(api, app, res, fallback));
 
     let ip = match cfg.general.public {
         true => [0, 0, 0, 0],
@@ -206,9 +175,6 @@ async fn main() -> color_eyre::Result<()> {
             return Ok(());
         }
     }*/
-
-    //server.run((ip, cfg.general.port)).await;
-    let service = ServiceBuilder::new().service(public);
 
     // And run our service using `hyper`
     let addr = SocketAddr::from((ip, cfg.general.port));

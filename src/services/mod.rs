@@ -3,7 +3,7 @@ use std::{fmt, io};
 mod router;
 pub use router::BaseRouter;
 mod public;
-pub use public::PublicOr;
+pub use public::{PublicOr, PublicOrLayer};
 mod fallback;
 pub use fallback::FallbackService;
 

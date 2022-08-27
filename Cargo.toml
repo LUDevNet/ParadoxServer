@@ -63,7 +63,7 @@ features = ["make", "util"]
 
 [dependencies.tower-http]
 version = "0.3.4"
-features = ["fs", "auth"]
+features = ["fs", "auth", "trace", "cors"]
 
 [dependencies.color-eyre]
 version = "0.6.2"
