@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
+use std::{borrow::Cow, collections::BTreeMap, net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
 use http::{header::InvalidHeaderValue, HeaderValue};
@@ -91,6 +91,34 @@ pub struct GeneralOptions {
     /// Whether this is served via https
     #[serde(default = "no")]
     pub secure: bool,
+}
+
+impl GeneralOptions {
+    pub fn scheme(&self) -> &'static str {
+        match self.secure {
+            true => "https",
+            false => "http",
+        }
+    }
+
+    pub fn ip(&self) -> [u8; 4] {
+        match self.public {
+            true => [0, 0, 0, 0],
+            false => [127, 0, 0, 1],
+        }
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        SocketAddr::from((self.ip(), self.port))
+    }
+
+    pub fn base_url(&self) -> String {
+        let scheme = self.scheme();
+        match self.base.as_deref() {
+            Some(b) => format!("{}://{}/{}", scheme, &self.domain, b),
+            None => format!("{}://{}", scheme, &self.domain),
+        }
+    }
 }
 
 fn no() -> bool {

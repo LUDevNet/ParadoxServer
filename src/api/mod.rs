@@ -23,9 +23,13 @@ use pin_project::pin_project;
 use serde::Serialize;
 use tower::Service;
 
-use crate::data::{
-    fs::{spawn_handler, EventSender},
-    locale::LocaleRoot,
+use crate::{
+    auth::AuthKind,
+    config::DataOptions,
+    data::{
+        fs::{spawn_handler, EventSender},
+        locale::LocaleRoot,
+    },
 };
 
 use self::{
@@ -383,4 +387,38 @@ impl<ReqBody> Service<Request<ReqBody>> for ApiService {
         };
         ApiFuture::ready(response)
     }
+}
+
+/// Make the API
+pub(crate) fn service(
+    cfg: &DataOptions,
+    locale_root: Arc<LocaleNode>,
+    auth_kind: AuthKind,
+    canonical_base_url: String,
+    db: Database<'static>,
+    tydb: &'static TypedDatabase<'static>,
+    rev: &'static ReverseLookup,
+) -> Result<ApiService, color_eyre::Report> {
+    // The pack service
+    let res_path = cfg
+        .res
+        .as_deref()
+        .unwrap_or_else(|| Path::new("client/res"));
+    let pki_path = cfg.versions.as_ref().map(|x| x.join("primary.pki"));
+    let pack = files::PackService::new(res_path, pki_path.as_deref())?;
+
+    let api_url = format!("{}/api/", canonical_base_url);
+    let openapi = docs::OpenApiService::new(&api_url, auth_kind)?;
+
+    let api_uri = Uri::from_str(&api_url)?;
+    Ok(ApiService::new(
+        db,
+        locale_root,
+        pack,
+        openapi,
+        api_uri,
+        tydb,
+        rev,
+        res_path,
+    ))
 }

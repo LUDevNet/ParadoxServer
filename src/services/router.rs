@@ -76,6 +76,8 @@ pub struct BaseRouter<A, P, S> {
     fallback: FallbackService,
 }
 
+pub const RES_PREFIX: &str = "/lu-res";
+
 impl<A, P, S> BaseRouter<A, P, S> {
     pub fn new(api: A, app: P, res: S, fallback: FallbackService) -> Self {
         Self {
@@ -152,7 +154,7 @@ where
                     })
                     .boxed();
             }
-            if let Some(rest) = path_and_query.strip_prefix("/lu-res") {
+            if let Some(rest) = path_and_query.strip_prefix(RES_PREFIX) {
                 let mut parts = uri::Parts::default();
                 parts.scheme = uri.scheme().cloned();
                 parts.authority = uri.authority().cloned();

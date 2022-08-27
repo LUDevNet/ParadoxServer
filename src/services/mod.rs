@@ -1,11 +1,19 @@
-use std::{fmt, io};
+use std::{
+    fmt, io,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
-mod router;
+pub mod router;
+use paradox_typed_db::TypedDatabase;
 pub use router::BaseRouter;
-mod public;
-pub use public::{PublicOr, PublicOrLayer};
 mod fallback;
 pub use fallback::FallbackService;
+use tower_http::services::ServeDir;
+mod template;
+pub use template::SpaDynamic;
+
+use crate::data::{fs::LuRes, locale::LocaleRoot};
 
 #[derive(Debug)]
 pub enum Error {
@@ -41,4 +49,25 @@ impl fmt::Display for Error {
             Self::Hyper(e) => fmt::Display::fmt(e, f),
         }
     }
+}
+
+pub(crate) fn app(
+    spa_path: &Path,
+    tydb: &'static TypedDatabase<'static>,
+    loc: LocaleRoot,
+    res: LuRes,
+    domain: &str,
+) -> Result<ServeDir<SpaDynamic>, color_eyre::Report> {
+    let spa_index = spa_path.join("index.html");
+
+    // Create handlebars registry
+    let hb = Arc::new(RwLock::new(template::Template::new()));
+    template::load_meta_template(&hb, &spa_index)?;
+    template::spawn_watcher(&spa_index, hb.clone())?;
+
+    // Set up the application
+    let spa_dynamic = template::SpaDynamic::new(tydb, loc, res, hb, domain);
+    Ok(ServeDir::new(spa_path)
+        .append_index_html_on_directories(false)
+        .fallback(spa_dynamic))
 }

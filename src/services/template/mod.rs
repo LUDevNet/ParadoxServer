@@ -17,7 +17,6 @@ use std::{
 };
 use tower_service::Service;
 
-//use handlebars::Handlebars;
 use paradox_typed_db::{ext::MissionKind, TypedDatabase};
 use regex::{Captures, Regex};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -450,7 +449,7 @@ impl tower_service::Service<IndexParams> for RenderService {
 }
 
 #[derive(Clone)]
-pub(crate) struct SpaDynamic {
+pub struct SpaDynamic {
     inner: RenderService,
     data: &'static TypedDatabase<'static>,
     default_img: &'static str,
