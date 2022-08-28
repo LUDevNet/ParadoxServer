@@ -94,6 +94,40 @@ pub struct ObjectsRevData {
     pub search_index: BTreeMap<i32, ObjectRev>,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct GateVersionUse {
+    skills: BTreeSet<i32>,
+    item_sets: BTreeSet<i32>,
+    missions: BTreeSet<i32>,
+    mission_tasks: BTreeSet<i32>,
+    objects: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GateVersionsUse {
+    inner: BTreeMap<String, GateVersionUse>,
+}
+
+impl GateVersionsUse {
+    fn get_or_default(&mut self, key: &Latin1Str) -> &mut GateVersionUse {
+        let str_key = key.decode();
+        if self.inner.contains_key(str_key.as_ref()) {
+            self.inner.get_mut(str_key.as_ref()).unwrap()
+        } else {
+            self.inner.entry(str_key.into_owned()).or_default()
+        }
+    }
+}
+
+impl serde::Serialize for GateVersionsUse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.inner.serialize(serializer)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
@@ -106,6 +140,7 @@ pub struct ReverseLookup {
     pub component_use: BTreeMap<i32, ComponentsUse>,
     pub activities: BTreeMap<i32, ActivityRev>,
     pub loot_table_index: BTreeMap<i32, LootTableIndexRev>,
+    pub gate_versions: GateVersionsUse,
 }
 
 impl ReverseLookup {
@@ -113,6 +148,7 @@ impl ReverseLookup {
         let mut skill_ids: HashMap<i32, SkillIdLookup> = HashMap::new();
         let mut mission_task_uids = HashMap::new();
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
+        let mut gate_versions = GateVersionsUse::default();
 
         for m in db.missions.row_iter() {
             let id = m.id();
@@ -127,7 +163,14 @@ impl ReverseLookup {
                 .or_default()
                 .entry(d_subtype)
                 .or_default()
-                .push(id)
+                .push(id);
+
+            if let Some(gate_version) = m.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .missions
+                    .insert(id);
+            }
         }
 
         for r in db.mission_tasks.row_iter() {
@@ -142,6 +185,14 @@ impl ReverseLookup {
                     }
                 }
             }
+
+            if let Some(gate_version) = r.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .mission_tasks
+                    .insert(uid);
+            }
+
             //skill_ids.entry(r.uid()).or_default().mission_tasks.push(r
         }
         for s in db.object_skills.row_iter() {
@@ -157,6 +208,16 @@ impl ReverseLookup {
                 .or_default()
                 .item_sets
                 .push(s.skill_set_id());
+        }
+
+        for item_set in db.item_sets.row_iter() {
+            let set_id = item_set.set_id();
+            if let Some(gate_version) = item_set.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .item_sets
+                    .insert(set_id);
+            }
         }
 
         let mut objects = ObjectsRevData {
@@ -188,6 +249,13 @@ impl ReverseLookup {
                     t: internal_notes,
                 },
             );
+
+            if let Some(gate_version) = o.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .objects
+                    .insert(id);
+            }
         }
 
         let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
@@ -216,9 +284,16 @@ impl ReverseLookup {
         }
 
         for skill in db.skills.row_iter() {
-            let bid = skill.behavior_id();
             let skid = skill.skill_id();
+            let bid = skill.behavior_id();
             behaviors.entry(bid).or_default().skill.insert(skid);
+
+            if let Some(gate_version) = skill.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .skills
+                    .insert(skid);
+            }
         }
 
         let mut activities: BTreeMap<i32, ActivityRev> = BTreeMap::new();
@@ -264,6 +339,7 @@ impl ReverseLookup {
             component_use,
             activities,
             loot_table_index,
+            gate_versions,
         }
     }
 
