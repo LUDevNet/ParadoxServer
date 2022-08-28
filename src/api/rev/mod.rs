@@ -3,7 +3,10 @@
 //! This module contains the reverse API of the server. These are, generally speaking,
 //! database lookups by some specific ID such as an "object template id" or a "skill id"
 //! and produce data from multiple tables.
-use super::PercentDecoded;
+pub(crate) use self::routes::Route;
+use super::adapter::Keys;
+use crate::data::locale::LocaleRoot;
+pub use data::ReverseLookup;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::{
@@ -12,21 +15,15 @@ use std::{
 };
 use tower::Service;
 
-mod common;
-mod data;
-
 mod behaviors;
+mod common;
 mod component_types;
+mod data;
 mod loot_table_index;
 mod missions;
 mod object_types;
+mod routes;
 mod skills;
-
-pub use data::ReverseLookup;
-
-use crate::data::locale::LocaleRoot;
-
-use super::adapter::Keys;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Api<T, E> {
@@ -46,198 +43,6 @@ static REV_APIS: &[&str; 8] = &[
     "object_types",
     "skill_ids",
 ];
-
-#[derive(Debug)]
-pub(super) enum Route {
-    Base,
-    Activities,
-    ActivityById(i32),
-    BehaviorById(i32),
-    ComponentTypes,
-    ComponentTypeById(i32),
-    ComponentTypeByIdAndCid(i32, i32),
-    LootTableIndexById(i32),
-    MissionTypes,
-    MissionTypesFull,
-    MissionTypeByTy(PercentDecoded),
-    MissionTypeBySubTy(PercentDecoded, PercentDecoded),
-    ObjectsSearchIndex,
-    ObjectTypes,
-    ObjectTypeByName(PercentDecoded),
-    SkillById(i32),
-}
-
-impl Route {
-    fn lti_from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
-        match parts.next() {
-            Some(key) => match key.parse() {
-                Ok(id) => match parts.next() {
-                    None => Ok(Self::LootTableIndexById(id)),
-                    Some("") => match parts.next() {
-                        None => Ok(Self::LootTableIndexById(id)),
-                        Some(_) => Err(()),
-                    },
-                    _ => Err(()),
-                },
-                Err(_) => Err(()),
-            },
-            _ => Err(()),
-        }
-    }
-
-    pub(super) fn from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
-        match parts.next() {
-            Some("activity" | "activities") => match parts.next() {
-                Some("") => match parts.next() {
-                    None => Ok(Self::Activities),
-                    _ => Err(()),
-                },
-                Some(key) => match parts.next() {
-                    None => match key.parse() {
-                        Ok(id) => Ok(Self::ActivityById(id)),
-                        Err(_) => Err(()),
-                    },
-                    _ => Err(()),
-                },
-                None => Ok(Self::Activities),
-            },
-            Some("behaviors") => match parts.next() {
-                Some(key) => match key.parse() {
-                    Ok(id) => Ok(Self::BehaviorById(id)),
-                    Err(_) => Err(()),
-                },
-                _ => Err(()),
-            },
-            Some("component_types" | "component-types") => match parts.next() {
-                Some("") => match parts.next() {
-                    None => Ok(Self::ComponentTypes),
-                    _ => Err(()),
-                },
-                Some(key) => match key.parse() {
-                    Ok(id) => match parts.next() {
-                        None => Ok(Self::ComponentTypeById(id)),
-                        Some("") => match parts.next() {
-                            Some(_) => Err(()),
-                            None => Ok(Self::ComponentTypeById(id)),
-                        },
-                        Some(key2) => match key2.parse() {
-                            Ok(cid) => match parts.next() {
-                                None => Ok(Self::ComponentTypeByIdAndCid(id, cid)),
-                                Some("") => match parts.next() {
-                                    Some(_) => Err(()),
-                                    None => Ok(Self::ComponentTypeByIdAndCid(id, cid)),
-                                },
-                                Some(_) => Err(()),
-                            },
-                            Err(_) => Err(()),
-                        },
-                    },
-                    Err(_) => Err(()),
-                },
-                None => Ok(Self::ComponentTypes),
-            },
-            Some("loot_table_index") => Self::lti_from_parts(parts),
-            Some("loot-tables") => match parts.next() {
-                Some("indices") => Self::lti_from_parts(parts),
-                Some(_) => Err(()),
-                None => Err(()),
-            },
-            Some("mission_types" | "mission-types") => Self::mission_types_from_parts(parts),
-            Some("missions") => match parts.next() {
-                Some("types") => Self::mission_types_from_parts(parts),
-                _ => Err(()),
-            },
-            Some("objects") => match parts.next() {
-                Some("search_index" | "search-index") => match parts.next() {
-                    None => Ok(Self::ObjectsSearchIndex),
-                    Some("") => match parts.next() {
-                        None => Ok(Self::ObjectsSearchIndex),
-                        _ => Err(()),
-                    },
-                    Some(_) => Err(()),
-                },
-                _ => Err(()),
-            },
-            Some("object_types") => match parts.next() {
-                None => Ok(Self::ObjectTypes),
-                Some("") => match parts.next() {
-                    None => Ok(Self::ObjectTypes),
-                    _ => Err(()),
-                },
-                Some(key) => match key.parse() {
-                    Ok(ty) => match parts.next() {
-                        None => Ok(Self::ObjectTypeByName(ty)),
-                        Some("") => match parts.next() {
-                            None => Ok(Self::ObjectTypeByName(ty)),
-                            _ => Err(()),
-                        },
-                        Some(_) => Err(()),
-                    },
-                    Err(_) => Err(()),
-                },
-            },
-            Some("skill_ids" | "skills") => match parts.next() {
-                Some(key) => match key.parse() {
-                    Ok(id) => match parts.next() {
-                        None => Ok(Self::SkillById(id)),
-                        Some("") => match parts.next() {
-                            None => Ok(Self::SkillById(id)),
-                            Some(_) => Err(()),
-                        },
-                        Some(_) => Err(()),
-                    },
-                    Err(_) => Err(()),
-                },
-                None => Err(()),
-            },
-            Some("") => match parts.next() {
-                None => Ok(Self::Base),
-                _ => Err(()),
-            },
-            None => Ok(Self::Base),
-            _ => Err(()),
-        }
-    }
-
-    fn mission_types_from_parts(mut parts: str::Split<char>) -> Result<Route, ()> {
-        match parts.next() {
-            None => Ok(Self::MissionTypes),
-            Some("") => match parts.next() {
-                None => Ok(Self::MissionTypes),
-                Some(_) => Err(()),
-            },
-            Some("full") => match parts.next() {
-                None => Ok(Self::MissionTypesFull),
-                Some("") => match parts.next() {
-                    None => Ok(Self::MissionTypesFull),
-                    Some(_) => Err(()),
-                },
-                Some(_) => Err(()),
-            },
-            Some(key) => match key.parse() {
-                Ok(d_type) => match parts.next() {
-                    None => Ok(Self::MissionTypeByTy(d_type)),
-                    Some("") => match parts.next() {
-                        None => Ok(Self::MissionTypeByTy(d_type)),
-                        Some(_) => Err(()),
-                    },
-                    Some(key2) => match key2.parse() {
-                        Ok(d_subtype) => match parts.next() {
-                            None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
-                            Some("") => match parts.next() {
-                                None => Ok(Self::MissionTypeBySubTy(d_type, d_subtype)),
-                                Some(_) => Err(()),
-                            },
-                            Some(_) => Err(()),
-                        },
-                        Err(_) => Err(()),
-                    },
-                },
-                Err(_) => Err(()),
-            },
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct RevService {
@@ -301,6 +106,10 @@ impl Service<(super::Accept, Route)> for RevService {
             }
             Route::SkillById(skill_id) => {
                 super::reply(a, &skills::rev_skill_id(self.db, self.rev, skill_id))
+            }
+            Route::GateVersions => super::reply(a, &self.rev.gate_versions.keys()),
+            Route::GateVersionByName(name) => {
+                super::reply_opt(a, self.rev.gate_versions.get(&name.0))
             }
         };
         std::future::ready(r)

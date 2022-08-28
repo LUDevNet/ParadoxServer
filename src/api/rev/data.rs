@@ -17,7 +17,7 @@ use assembly_fdb::common::Latin1Str;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 
-use crate::data::skill_system::match_action_key;
+use crate::{api::adapter::Keys, data::skill_system::match_action_key};
 
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct SkillIdLookup {
@@ -116,6 +116,14 @@ impl GateVersionsUse {
         } else {
             self.inner.entry(str_key.into_owned()).or_default()
         }
+    }
+
+    pub(crate) fn keys(&self) -> Keys<&BTreeMap<String, GateVersionUse>> {
+        Keys::new(&self.inner)
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&GateVersionUse> {
+        self.inner.get(name)
     }
 }
 
