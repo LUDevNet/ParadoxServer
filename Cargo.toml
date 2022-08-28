@@ -28,7 +28,7 @@ rev = "258fc31e2c50713912f54717871f2915617b7db4"
 
 [dependencies.paradox-typed-db]
 git = "https://github.com/Xiphoseer/paradox-typed-db.git"
-rev = "630cbc1b0a36c06da986a5109c64360a440ff46a"
+rev = "f69dd61e62228c13f10567a7e9882fc2fe3cf968"
 
 [dependencies]
 base64 = "0.13"

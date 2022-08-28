@@ -96,11 +96,25 @@ pub struct ObjectsRevData {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct GateVersionUse {
-    skills: BTreeSet<i32>,
+    activities: BTreeSet<i32>,
+    deletion_restrictions: BTreeSet<i32>,
+    emotes: BTreeSet<i32>,
+    loot_matrix: BTreeSet<i32>,
     item_sets: BTreeSet<i32>,
     missions: BTreeSet<i32>,
     mission_tasks: BTreeSet<i32>,
     objects: BTreeSet<i32>,
+    player_statistics: BTreeSet<i32>,
+    preconditions: BTreeSet<i32>,
+    property_template: BTreeSet<i32>,
+    reward_codes: BTreeSet<i32>,
+    speedchat_menu: BTreeSet<i32>,
+    skills: BTreeSet<i32>,
+    ug_behavior_sounds: BTreeSet<i32>,
+    whats_cool_item_spotlight: BTreeSet<i32>,
+    whats_cool_news_and_tips: BTreeSet<i32>,
+    zone_loading_tips: BTreeSet<i32>,
+    zones: BTreeSet<i32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -157,6 +171,85 @@ impl ReverseLookup {
         let mut mission_task_uids = HashMap::new();
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
+
+        for a in db.activities.row_iter() {
+            let id = a.activity_id();
+            if let Some(gate) = a.gate_version() {
+                gate_versions.get_or_default(gate).activities.insert(id);
+            }
+        }
+
+        let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
+        for bp in db.behavior_parameters.row_iter() {
+            let parameter_id = bp.parameter_id();
+            let behavior_id = bp.behavior_id();
+            if match_action_key(parameter_id) {
+                let value = bp.value() as i32;
+                behaviors.entry(behavior_id).or_default().uses.insert(value);
+                behaviors
+                    .entry(value)
+                    .or_default()
+                    .used_by
+                    .insert(behavior_id);
+            }
+        }
+
+        let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
+        for creg in db.comp_reg.row_iter() {
+            let id = creg.id();
+            let ty = creg.component_type();
+            let cid = creg.component_id();
+            let ty_entry = component_use.entry(ty).or_default();
+            let co_entry = ty_entry.components.entry(cid).or_default();
+            co_entry.lots.push(id);
+        }
+
+        for row in db.deletion_restrictions.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .deletion_restrictions
+                    .insert(id);
+            }
+        }
+
+        let mut factions: BTreeMap<i32, FactionRev> = BTreeMap::new();
+        for d in db.destructible_component.row_iter() {
+            if let Some(faction) = d.faction() {
+                let entry = factions.entry(faction).or_default();
+                entry.destructible.push(d.id());
+            }
+
+            let faction_list: i32 = d.faction_list().decode().parse().unwrap();
+            if faction_list >= 0 {
+                let entry = factions.entry(faction_list).or_default();
+                entry.destructible_list.push(d.id());
+            }
+        }
+
+        for row in db.emotes.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).emotes.insert(id);
+            }
+        }
+
+        for row in db.loot_matrix.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).loot_matrix.insert(id);
+            }
+        }
+
+        let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
+        for l in db.loot_table.row_iter() {
+            let lti = l.loot_table_index();
+            let itemid = l.itemid();
+            let id = l.id();
+            let entry = loot_table_index.entry(lti).or_default();
+            entry.items.insert(id, itemid);
+        }
 
         for m in db.missions.row_iter() {
             let id = m.id();
@@ -266,28 +359,46 @@ impl ReverseLookup {
             }
         }
 
-        let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
-        for creg in db.comp_reg.row_iter() {
-            let id = creg.id();
-            let ty = creg.component_type();
-            let cid = creg.component_id();
-            let ty_entry = component_use.entry(ty).or_default();
-            let co_entry = ty_entry.components.entry(cid).or_default();
-            co_entry.lots.push(id);
+        for row in db.player_statistics.row_iter() {
+            let id = row.stat_id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .player_statistics
+                    .insert(id);
+            }
         }
 
-        let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
-        for bp in db.behavior_parameters.row_iter() {
-            let parameter_id = bp.parameter_id();
-            let behavior_id = bp.behavior_id();
-            if match_action_key(parameter_id) {
-                let value = bp.value() as i32;
-                behaviors.entry(behavior_id).or_default().uses.insert(value);
-                behaviors
-                    .entry(value)
-                    .or_default()
-                    .used_by
-                    .insert(behavior_id);
+        for row in db.preconditions.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).preconditions.insert(id);
+            }
+        }
+
+        for row in db.property_template.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .property_template
+                    .insert(id);
+            }
+        }
+
+        let mut activities: BTreeMap<i32, ActivityRev> = BTreeMap::new();
+        for r in db.rebuild_component.row_iter() {
+            let id = r.id();
+            if let Some(aid) = r.activity_id() {
+                let entry = activities.entry(aid).or_default();
+                entry.rebuild.push(id);
+            }
+        }
+
+        for row in db.reward_codes.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).reward_codes.insert(id);
             }
         }
 
@@ -304,35 +415,56 @@ impl ReverseLookup {
             }
         }
 
-        let mut activities: BTreeMap<i32, ActivityRev> = BTreeMap::new();
-        for r in db.rebuild_component.row_iter() {
-            let id = r.id();
-            if let Some(aid) = r.activity_id() {
-                let entry = activities.entry(aid).or_default();
-                entry.rebuild.push(id);
+        for row in db.speedchat_menu.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).speedchat_menu.insert(id);
             }
         }
 
-        let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
-        for l in db.loot_table.row_iter() {
-            let lti = l.loot_table_index();
-            let itemid = l.itemid();
-            let id = l.id();
-            let entry = loot_table_index.entry(lti).or_default();
-            entry.items.insert(id, itemid);
+        for row in db.ug_behavior_sounds.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .ug_behavior_sounds
+                    .insert(id);
+            }
         }
 
-        let mut factions: BTreeMap<i32, FactionRev> = BTreeMap::new();
-        for d in db.destructible_component.row_iter() {
-            if let Some(faction) = d.faction() {
-                let entry = factions.entry(faction).or_default();
-                entry.destructible.push(d.id());
+        for row in db.whats_cool_item_spotlight.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .whats_cool_item_spotlight
+                    .insert(id);
             }
+        }
 
-            let faction_list: i32 = d.faction_list().decode().parse().unwrap();
-            if faction_list >= 0 {
-                let entry = factions.entry(faction_list).or_default();
-                entry.destructible_list.push(d.id());
+        for row in db.whats_cool_news_and_tips.row_iter() {
+            let id = row.id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions
+                    .get_or_default(gate)
+                    .whats_cool_news_and_tips
+                    .insert(id);
+            }
+        }
+
+        for row in db.zone_loading_tips.row_iter() {
+            let id = row.id();
+            let gate = row.gate_version();
+            gate_versions
+                .get_or_default(gate)
+                .zone_loading_tips
+                .insert(id);
+        }
+
+        for row in db.zone_table.row_iter() {
+            let id = row.zone_id();
+            if let Some(gate) = row.gate_version() {
+                gate_versions.get_or_default(gate).zones.insert(id);
             }
         }
 
