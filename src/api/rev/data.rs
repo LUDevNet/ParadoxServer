@@ -376,6 +376,20 @@ impl ReverseLookup {
             }
         }
 
+        for row in db.jet_pack_pad_component.row_iter() {
+            let id = row.id();
+            if let Some(lot) = row.lot_warning_volume() {
+                objects
+                    .r(lot)
+                    .jet_pack_pad_component
+                    .lot_warning_volume
+                    .insert(id);
+            }
+            if let Some(lot) = row.lot_blocker() {
+                objects.r(lot).jet_pack_pad_component.lot_blocker.insert(id);
+            }
+        }
+
         let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
         for l in db.loot_table.row_iter() {
             let lti = l.loot_table_index();
@@ -406,6 +420,21 @@ impl ReverseLookup {
                     .missions
                     .insert(id);
             }
+
+            for lot in [
+                m.reward_item1(),
+                m.reward_item2(),
+                m.reward_item3(),
+                m.reward_item4(),
+                m.reward_item1_repeatable(),
+                m.reward_item2_repeatable(),
+                m.reward_item3_repeatable(),
+                m.reward_item4_repeatable(),
+            ] {
+                if lot > 0 {
+                    objects.r(lot).missions.reward_items.insert(id);
+                }
+            }
         }
 
         for r in db.mission_tasks.row_iter() {
@@ -430,6 +459,13 @@ impl ReverseLookup {
 
             //skill_ids.entry(r.uid()).or_default().mission_tasks.push(r
         }
+
+        for row in db.npc_icons.row_iter() {
+            let id = row.id();
+            let lot = row.lot();
+            objects.r(lot).npc_icons_lot.insert(id);
+        }
+
         for s in db.object_skills.row_iter() {
             skill_ids
                 .entry(s.skill_id())
@@ -508,10 +544,19 @@ impl ReverseLookup {
             }
         }
 
+        for row in db.rebuild_sections.row_iter() {
+            let id = row.id();
+            let lot = row.object_id();
+            objects.r(lot).rebuild_sections.insert(id);
+        }
+
         for row in db.reward_codes.row_iter() {
             let id = row.id();
             if let Some(gate) = row.gate_version() {
                 gate_versions.get_or_default(gate).reward_codes.insert(id);
+            }
+            if let Some(lot) = row.attachment_lot() {
+                objects.r(lot).reward_codes.insert(id);
             }
         }
 
