@@ -111,6 +111,8 @@ impl Service<(super::Accept, Route)> for RevService {
             Route::GateVersionByName(name) => {
                 super::reply_opt(a, self.rev.gate_versions.get(&name.0))
             }
+            Route::Objects => super::reply(a, &Keys::new(&self.rev.objects.rev)),
+            Route::ObjectById(id) => super::reply_opt(a, self.rev.objects.rev.get(&id)),
         };
         std::future::ready(r)
     }

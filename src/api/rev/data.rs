@@ -11,11 +11,14 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap},
+    str::FromStr,
+    time::Instant,
 };
 
 use assembly_fdb::common::Latin1Str;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
+use tracing::info;
 
 use crate::{api::adapter::Keys, data::skill_system::match_action_key};
 
@@ -75,7 +78,7 @@ pub struct FactionRev {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ObjectRev {
+pub struct ObjectStrings {
     /// name
     n: String,
     /// description
@@ -89,9 +92,58 @@ pub struct ObjectRev {
     t: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ObjectItemComponentUse {
+    currency_lot: BTreeSet<i32>,
+    commendation_lot: BTreeSet<i32>,
+    subitems: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ObjectJetPackUse {
+    lot_blocker: BTreeSet<i32>,
+    lot_warning_volume: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ObjectMissionUse {
+    reward_items: BTreeSet<i32>,
+    // ignore offer, target for now, should be inverse to MissionNPCComponent
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ObjectPetTamingUse {
+    model_lot: BTreeSet<i32>,
+    npc_lot: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ObjectsUse {
+    /// The `CurrencyDenominations.value` matching this LOT
+    currency_denomination: Option<i32>,
+    deletion_restrictions: BTreeSet<i32>,
+    inventory_component: BTreeSet<i32>,
+    item_component: ObjectItemComponentUse,
+    item_sets: BTreeSet<i32>,
+    jet_pack_pad_component: ObjectJetPackUse,
+    //loot_table: BTreeSet<i32>, // <- primary key here
+    npc_icons_lot: BTreeSet<i32>,
+    rebuild_sections: BTreeSet<i32>,
+    missions: ObjectMissionUse,
+    reward_codes: BTreeSet<i32>,
+    pet_taming_puzzles: ObjectPetTamingUse,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ObjectsRevData {
-    pub search_index: BTreeMap<i32, ObjectRev>,
+    pub search_index: BTreeMap<i32, ObjectStrings>,
+    pub rev: BTreeMap<i32, ObjectsUse>,
+}
+
+impl ObjectsRevData {
+    fn r(&mut self, lot: i32) -> &mut ObjectsUse {
+        self.rev.entry(lot).or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -167,10 +219,13 @@ pub struct ReverseLookup {
 
 impl ReverseLookup {
     pub(crate) fn new(db: &'_ TypedDatabase<'_>) -> Self {
+        let time = Instant::now();
+        info!("Starting to load ReverseLookup");
         let mut skill_ids: HashMap<i32, SkillIdLookup> = HashMap::new();
         let mut mission_task_uids = HashMap::new();
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
+        let mut objects = ObjectsRevData::default();
 
         for a in db.activities.row_iter() {
             let id = a.activity_id();
@@ -204,8 +259,31 @@ impl ReverseLookup {
             co_entry.lots.push(id);
         }
 
+        for row in db.currency_denominations.row_iter() {
+            objects
+                .rev
+                .entry(row.objectid())
+                .or_default()
+                .currency_denomination = Some(row.value());
+        }
+
         for row in db.deletion_restrictions.row_iter() {
             let id = row.id();
+            if row.check_type() == 0 {
+                if let Some(ids) = row.ids() {
+                    let s = ids.decode();
+                    for id_str in s.as_ref().trim().split(',').map(str::trim) {
+                        if let Ok(lot) = id_str.parse() {
+                            objects
+                                .rev
+                                .entry(lot)
+                                .or_default()
+                                .deletion_restrictions
+                                .insert(id);
+                        }
+                    }
+                }
+            }
             if let Some(gate) = row.gate_version() {
                 gate_versions
                     .get_or_default(gate)
@@ -239,6 +317,62 @@ impl ReverseLookup {
             let id = row.id();
             if let Some(gate) = row.gate_version() {
                 gate_versions.get_or_default(gate).loot_matrix.insert(id);
+            }
+        }
+
+        for row in db.inventory_component.row_iter() {
+            objects.r(row.itemid()).inventory_component.insert(row.id());
+        }
+
+        for row in db.item_component.row_iter() {
+            let id = row.id();
+            if let Some(lot) = row.currency_lot() {
+                objects.r(lot).item_component.currency_lot.insert(id);
+            }
+            if let Some(lot) = row.commendation_lot() {
+                objects.r(lot).item_component.commendation_lot.insert(id);
+            }
+            if let Some(text) = row.sub_items() {
+                for lot in text
+                    .decode()
+                    .trim()
+                    .split(',')
+                    .map(str::trim)
+                    .map(FromStr::from_str)
+                    .filter_map(Result::ok)
+                {
+                    objects.r(lot).item_component.subitems.insert(id);
+                }
+            }
+        }
+
+        for s in db.item_set_skills.row_iter() {
+            skill_ids
+                .entry(s.skill_id())
+                .or_default()
+                .item_sets
+                .push(s.skill_set_id());
+        }
+
+        for item_set in db.item_sets.row_iter() {
+            let set_id = item_set.set_id();
+            if let Some(gate_version) = item_set.gate_version() {
+                gate_versions
+                    .get_or_default(gate_version)
+                    .item_sets
+                    .insert(set_id);
+            }
+
+            for lot in item_set
+                .item_i_ds()
+                .decode()
+                .trim()
+                .split(',')
+                .map(str::trim)
+                .map(FromStr::from_str)
+                .filter_map(Result::ok)
+            {
+                objects.r(lot).item_sets.insert(set_id);
             }
         }
 
@@ -303,27 +437,6 @@ impl ReverseLookup {
                 .objects
                 .push(s.object_template());
         }
-        for s in db.item_set_skills.row_iter() {
-            skill_ids
-                .entry(s.skill_id())
-                .or_default()
-                .item_sets
-                .push(s.skill_set_id());
-        }
-
-        for item_set in db.item_sets.row_iter() {
-            let set_id = item_set.set_id();
-            if let Some(gate_version) = item_set.gate_version() {
-                gate_versions
-                    .get_or_default(gate_version)
-                    .item_sets
-                    .insert(set_id);
-            }
-        }
-
-        let mut objects = ObjectsRevData {
-            search_index: BTreeMap::new(),
-        };
 
         let mut object_types = BTreeMap::<_, Vec<_>>::new();
         for o in db.objects.row_iter() {
@@ -343,7 +456,7 @@ impl ReverseLookup {
 
             objects.search_index.insert(
                 id,
-                ObjectRev {
+                ObjectStrings {
                     n: name,
                     d: description,
                     i: display_name,
@@ -468,6 +581,8 @@ impl ReverseLookup {
             }
         }
 
+        let duration = time.elapsed();
+        info!("Done loading ReverseLookup ({}ms)", duration.as_millis());
         Self {
             behaviors,
             skill_ids,

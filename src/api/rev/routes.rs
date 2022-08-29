@@ -15,6 +15,8 @@ pub(crate) enum Route {
     MissionTypesFull,
     MissionTypeByTy(PercentDecoded),
     MissionTypeBySubTy(PercentDecoded, PercentDecoded),
+    Objects,
+    ObjectById(i32),
     ObjectsSearchIndex,
     ObjectTypes,
     ObjectTypeByName(PercentDecoded),
@@ -122,6 +124,11 @@ impl Route {
                 _ => Err(()),
             },
             Some("objects") => match parts.next() {
+                None => Ok(Self::Objects),
+                Some("") => match parts.next() {
+                    None => Ok(Self::Objects),
+                    Some(_) => Err(()),
+                },
                 Some("search_index" | "search-index") => match parts.next() {
                     None => Ok(Self::ObjectsSearchIndex),
                     Some("") => match parts.next() {
@@ -130,7 +137,17 @@ impl Route {
                     },
                     Some(_) => Err(()),
                 },
-                _ => Err(()),
+                Some(key) => match key.parse() {
+                    Ok(lot) => match parts.next() {
+                        None => Ok(Self::ObjectById(lot)),
+                        Some("") => match parts.next() {
+                            None => Ok(Self::ObjectById(lot)),
+                            Some(_) => Err(()),
+                        },
+                        Some(_) => Err(()),
+                    },
+                    Err(_) => Err(()),
+                },
             },
             Some("object_types") => match parts.next() {
                 None => Ok(Self::ObjectTypes),
