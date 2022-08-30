@@ -114,7 +114,7 @@ impl<B: http_body::Body, R: http_body::Body + Default> AuthorizeRequest<B> for A
                 if let Some(Ok(user_agent)) =
                     request.headers().get(USER_AGENT).map(HeaderValue::to_str)
                 {
-                    if cfg.allowed_bots.contains(user_agent) {
+                    if cfg.allowed_bots.iter().any(|u| user_agent.contains(u)) {
                         return Ok(());
                     }
                 }
