@@ -1,6 +1,20 @@
 use crate::api::PercentDecoded;
 use std::str;
 
+pub(super) static REV_APIS: &[&str; 11] = &[
+    "activity",
+    "behaviors",
+    "component_types",
+    "faction",
+    "gate_version",
+    "loot_table_index",
+    "mission_types",
+    "missions",
+    "objects",
+    "object_types",
+    "skill_ids",
+];
+
 #[derive(Debug)]
 pub(crate) enum Route {
     Base,
@@ -10,6 +24,8 @@ pub(crate) enum Route {
     ComponentTypes,
     ComponentTypeById(i32),
     ComponentTypeByIdAndCid(i32, i32),
+    Factions,
+    FactionById(i32),
     LootTableIndexById(i32),
     MissionTypes,
     MissionTypesFull,
@@ -93,6 +109,24 @@ impl Route {
                     Err(_) => Err(()),
                 },
                 None => Ok(Self::ComponentTypes),
+            },
+            Some("faction" | "factions") => match parts.next() {
+                None => Ok(Self::Factions),
+                Some("") => match parts.next() {
+                    None => Ok(Self::Factions),
+                    Some(_) => Err(()),
+                },
+                Some(key) => match key.parse() {
+                    Ok(id) => match parts.next() {
+                        None => Ok(Self::FactionById(id)),
+                        Some("") => match parts.next() {
+                            Some(_) => Err(()),
+                            None => Ok(Self::FactionById(id)),
+                        },
+                        Some(_) => Err(()),
+                    },
+                    Err(_) => Err(()),
+                },
             },
             Some("gate_version" | "gate-versions") => match parts.next() {
                 None => Ok(Self::GateVersions),

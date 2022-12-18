@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::iter::Copied;
 use std::slice::Iter;
 
@@ -195,5 +195,66 @@ impl<'a, K: Serialize, V> Serialize for Keys<&'a HashMap<K, V>> {
         S: serde::Serializer,
     {
         serializer.collect_seq(self.inner.keys())
+    }
+}
+
+pub trait Filter<K> {
+    fn contains(&self, key: K) -> bool;
+}
+
+impl<K: Copy + PartialEq + Ord> Filter<K> for BTreeSet<K> {
+    fn contains(&self, key: K) -> bool {
+        self.contains(&key)
+    }
+}
+
+impl<K, F: Filter<K>> Filter<K> for &F {
+    fn contains(&self, key: K) -> bool {
+        <F as Filter<K>>::contains(self, key)
+    }
+}
+
+/// [Serialize] adapter that shows only those keys from map `M` that are in `K`
+pub(crate) struct Filtered<M: 'static, K> {
+    pub(crate) inner: &'static M,
+    pub(crate) keys: K,
+}
+
+impl<M: 'static, K: Filter<i32>, V: Serialize> Serialize for Filtered<M, K>
+where
+    for<'a> &'a M: IntoIterator<Item = (&'a i32, &'a V)>,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_map(
+            self.inner
+                .into_iter()
+                .filter(|&(k, _v)| self.keys.contains(*k)),
+        )
+    }
+}
+
+/// [Serialize] adapter that shows only those keys from map `M` that are in `K` (in either `keys1` or `keys2`)
+pub(crate) struct Filtered2<M: 'static, K> {
+    pub(crate) inner: &'static M,
+    pub(crate) keys1: K,
+    pub(crate) keys2: K,
+}
+
+impl<M: 'static, K: Filter<i32>, V: Serialize> Serialize for Filtered2<M, K>
+where
+    for<'a> &'a M: IntoIterator<Item = (&'a i32, &'a V)>,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_map(
+            self.inner
+                .into_iter()
+                .filter(|&(k, _v)| self.keys1.contains(*k) || self.keys2.contains(*k)),
+        )
     }
 }

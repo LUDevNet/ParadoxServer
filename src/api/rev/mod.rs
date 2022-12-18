@@ -4,13 +4,14 @@
 //! database lookups by some specific ID such as an "object template id" or a "skill id"
 //! and produce data from multiple tables.
 pub(crate) use self::routes::Route;
+use self::{factions::FactionById, routes::REV_APIS};
 use super::adapter::Keys;
 use crate::data::locale::LocaleRoot;
 pub use data::ReverseLookup;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::{
-    io, str,
+    io,
     task::{Context, Poll},
 };
 use tower::Service;
@@ -19,6 +20,7 @@ mod behaviors;
 mod common;
 mod component_types;
 mod data;
+mod factions;
 mod loot_table_index;
 mod missions;
 mod object_types;
@@ -32,19 +34,6 @@ pub struct Api<T, E> {
     #[serde(rename = "_embedded")]
     embedded: E,
 }
-
-static REV_APIS: &[&str; 10] = &[
-    "activity",
-    "behaviors",
-    "component_types",
-    "gate_version",
-    "loot_table_index",
-    "mission_types",
-    "missions",
-    "objects",
-    "object_types",
-    "skill_ids",
-];
 
 #[derive(Clone)]
 pub struct RevService {
@@ -87,6 +76,8 @@ impl Service<(super::Accept, Route)> for RevService {
                 a,
                 &component_types::rev_single_component(self.rev, key, cid),
             ),
+            Route::Factions => super::reply(a, &Keys::new(&self.rev.factions)),
+            Route::FactionById(id) => super::reply(a, &FactionById::new(self.rev, id)),
             Route::LootTableIndexById(id) => super::reply(
                 a,
                 &loot_table_index::rev_loop_table_index(self.db, self.rev, id),

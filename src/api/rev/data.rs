@@ -72,9 +72,9 @@ pub struct LootTableIndexRev {
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct FactionRev {
     /// DestructibleComponents have the current ID in `factionList`
-    pub destructible_list: Vec<i32>,
+    pub destructible_list: BTreeSet<i32>,
     /// DestructibleComponents have the current ID in `faction`
-    pub destructible: Vec<i32>,
+    pub destructible: BTreeSet<i32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,7 +208,7 @@ pub struct ReverseLookup {
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
-
+    pub factions: BTreeMap<i32, FactionRev>,
     pub objects: ObjectsRevData,
     pub object_types: BTreeMap<String, Vec<i32>>,
     pub component_use: BTreeMap<i32, ComponentsUse>,
@@ -296,13 +296,13 @@ impl ReverseLookup {
         for d in db.destructible_component.row_iter() {
             if let Some(faction) = d.faction() {
                 let entry = factions.entry(faction).or_default();
-                entry.destructible.push(d.id());
+                entry.destructible.insert(d.id());
             }
 
             let faction_list: i32 = d.faction_list().decode().parse().unwrap();
             if faction_list >= 0 {
                 let entry = factions.entry(faction_list).or_default();
-                entry.destructible_list.push(d.id());
+                entry.destructible_list.insert(d.id());
             }
         }
 
@@ -633,7 +633,7 @@ impl ReverseLookup {
             skill_ids,
             mission_task_uids,
             mission_types,
-
+            factions,
             objects,
             object_types,
             component_use,
