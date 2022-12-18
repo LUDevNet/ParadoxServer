@@ -111,12 +111,10 @@ impl<'a> Iterator for FilteredRowIter<'a> {
     type Item = Row<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for next in self.inner.by_ref() {
-            if self.gate.filter(&next.field_at(0).unwrap()) {
-                return Some(next);
-            }
-        }
-        None
+        let gate = &self.gate;
+        self.inner
+            .by_ref()
+            .find(|row| gate.filter(&row.field_at(0).unwrap()))
     }
 }
 

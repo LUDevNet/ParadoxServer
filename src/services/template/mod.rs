@@ -123,7 +123,7 @@ pub(crate) fn load_meta_template(
     path: &Path,
 ) -> Result<(), color_eyre::Report> {
     info!("(re-)loading template.html");
-    let index_text = std::fs::read_to_string(&path)
+    let index_text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to load '{}'", path.display()))?;
     let tpl_str = make_meta_template(&index_text);
     let mut hb = reg
@@ -165,7 +165,7 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id
     let tasks = data.get_mission_tasks(id);
     let tasks_locale = loc.root.str_children.get("MissionTasks").unwrap();
     for task in tasks {
-        if image == None {
+        if image.is_none() {
             if let Some(icon_id) = task.icon_id {
                 if let Some(path) = data.get_icon_path(icon_id) {
                     image = cleanup_path(path).map(|p| res.to_res_href(&p));

@@ -68,7 +68,7 @@ impl<'a> All<'a> {
     pub fn new_inner(mut inner: &'a LocaleNode) -> (String, Self) {
         let mut suffix = String::new();
         loop {
-            let v_count = if inner.value.is_some() { 1 } else { 0 };
+            let v_count = usize::from(inner.value.is_some());
             let i_count = inner.int_children.len();
             let s_count = inner.str_children.len();
 
@@ -92,7 +92,7 @@ impl<'a> Serialize for All<'a> {
     where
         S: serde::Serializer,
     {
-        let v_count = if self.inner.value.is_some() { 1 } else { 0 };
+        let v_count = usize::from(self.inner.value.is_some());
         let i_count = self.inner.int_children.len();
         let s_count = self.inner.str_children.len();
         let count = v_count + i_count + s_count;

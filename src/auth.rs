@@ -48,7 +48,7 @@ impl AuthImpl {
                     .iter()
                     .map(|(user, password)| {
                         let text = format!("{}:{}", user, password);
-                        base64::encode(&text)
+                        base64::encode(text)
                     })
                     .collect();
                 auth_impl = AuthImpl::Basic(Arc::new(BasicCfg {
