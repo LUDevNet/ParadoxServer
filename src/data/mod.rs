@@ -1,6 +1,6 @@
 use std::{convert::TryFrom, fmt};
 
-use assembly_fdb::common::Latin1Str;
+use latin1str::Latin1Str;
 use serde::{Deserialize, Serialize};
 
 pub mod fs;

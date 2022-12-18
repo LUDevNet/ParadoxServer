@@ -1,11 +1,15 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    num::{ParseFloatError, ParseIntError},
+};
 
 use assembly_core::buffer::CastError;
 use assembly_fdb::{
-    common::ValueType,
     mem::{Column, Database, Row, RowHeaderIter},
-    query::{self, PrimaryKeyFilter},
+    value::{Context, Value, ValueType},
+    FdbHash,
 };
+use latin1str::Latin1String;
 use linked_hash_map::LinkedHashMap;
 use serde::{ser::SerializeSeq, Serialize};
 
@@ -104,7 +108,7 @@ pub(super) fn table_all_json<'a>(
 
 struct FilteredRowIter<'a> {
     inner: RowHeaderIter<'a>,
-    gate: PrimaryKeyFilter,
+    gate: Value<FastContext>,
 }
 
 impl<'a> Iterator for FilteredRowIter<'a> {
@@ -114,14 +118,54 @@ impl<'a> Iterator for FilteredRowIter<'a> {
         let gate = &self.gate;
         self.inner
             .by_ref()
-            .find(|row| gate.filter(&row.field_at(0).unwrap()))
+            .find(|row| gate == &row.field_at(0).unwrap())
     }
 }
 
-pub(super) fn table_key_json<'a, K: Into<String>>(
+struct FastContext;
+
+impl Context for FastContext {
+    type I64 = i64;
+    type String = Latin1String;
+    type XML = Latin1String;
+}
+
+struct ParseError;
+
+impl From<ParseIntError> for ParseError {
+    fn from(_: ParseIntError) -> Self {
+        Self
+    }
+}
+
+impl From<ParseFloatError> for ParseError {
+    fn from(_: ParseFloatError) -> Self {
+        Self
+    }
+}
+
+impl FastContext {
+    pub fn parse_as(v: &str, ty: ValueType) -> Result<Value<FastContext>, ParseError> {
+        Ok(match ty {
+            ValueType::Nothing => Value::Nothing,
+            ValueType::Integer => Value::Integer(v.parse()?),
+            ValueType::Float => Value::Float(v.parse()?),
+            ValueType::Text => Value::Text(Latin1String::encode(v).into_owned()),
+            ValueType::Boolean => match v {
+                "true" | "1" | "TRUE" => Value::Boolean(true),
+                "false" | "0" | "FALSE" => Value::Boolean(false),
+                _ => return Err(ParseError),
+            },
+            ValueType::BigInt => Value::BigInt(v.parse()?),
+            ValueType::VarChar => return Err(ParseError),
+        })
+    }
+}
+
+pub(super) fn table_key_json<'a>(
     db: Database<'a>,
     name: &str,
-    key: K,
+    key: &str,
 ) -> Result<Option<impl Serialize + 'a>, CastError> {
     let tables = db.tables()?;
     let table = match tables.by_name(name) {
@@ -132,8 +176,8 @@ pub(super) fn table_key_json<'a, K: Into<String>>(
     let index_field = table.column_at(0).unwrap();
     let index_field_type = index_field.value_type();
 
-    let pk_filter = match query::pk_filter(key, index_field_type) {
-        Ok(f) => f,
+    let pk_filter = match FastContext::parse_as(key, index_field_type) {
+        Ok(v) => v,
         Err(_) => return Ok(None),
     };
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use assembly_fdb::common::Latin1Str;
+use latin1str::Latin1Str;
 use paradox_typed_db::{
     columns::ObjectsColumn,
     rows::{MissionTasksRow, ObjectsRow},

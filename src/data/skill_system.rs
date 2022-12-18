@@ -1,4 +1,4 @@
-use assembly_fdb::common::Latin1Str;
+use latin1str::Latin1Str;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

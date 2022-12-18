@@ -7,11 +7,11 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use assembly_fdb::common::Latin1Str;
 use assembly_pack::{
     crc::calculate_crc,
     pki::core::{PackFileRef, PackIndexFile},
 };
+use latin1str::Latin1Str;
 
 use hyper::body::Bytes;
 use serde::Serialize;

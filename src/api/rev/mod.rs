@@ -33,12 +33,14 @@ pub struct Api<T, E> {
     embedded: E,
 }
 
-static REV_APIS: &[&str; 8] = &[
+static REV_APIS: &[&str; 10] = &[
     "activity",
     "behaviors",
     "component_types",
+    "gate_version",
     "loot_table_index",
     "mission_types",
+    "missions",
     "objects",
     "object_types",
     "skill_ids",

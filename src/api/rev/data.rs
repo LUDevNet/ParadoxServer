@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-use assembly_fdb::common::Latin1Str;
+use latin1str::Latin1Str;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use tracing::info;

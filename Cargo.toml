@@ -5,30 +5,29 @@ authors = ["Xiphoseer <xiphoseer@mailbox.org>"]
 edition = "2018"
 
 [dependencies.assembly-core]
-git = "https://github.com/Xiphoseer/assembly_rs.git"
-rev = "258fc31e2c50713912f54717871f2915617b7db4"
+version = "0.3.1"
 
-[dependencies.assembly-maps]
-git = "https://github.com/Xiphoseer/assembly_rs.git"
-rev = "258fc31e2c50713912f54717871f2915617b7db4"
+#[dependencies.assembly-maps]
+#git = "https://github.com/Xiphoseer/assembly_rs.git"
+#rev = "258fc31e2c50713912f54717871f2915617b7db4"
 
 [dependencies.assembly-pack]
 git = "https://github.com/Xiphoseer/assembly_rs.git"
-rev = "258fc31e2c50713912f54717871f2915617b7db4"
+rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
+features = ["pki"]
 
 [dependencies.assembly-fdb]
-git = "https://github.com/Xiphoseer/assembly_rs.git"
-rev = "258fc31e2c50713912f54717871f2915617b7db4"
+version = "0.1.0"
 default-features = false
-features = ["serde-derives"]
+features = ["serde"]
 
 [dependencies.assembly-xml]
 git = "https://github.com/Xiphoseer/assembly_rs.git"
-rev = "258fc31e2c50713912f54717871f2915617b7db4"
+rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
 
 [dependencies.paradox-typed-db]
 git = "https://github.com/Xiphoseer/paradox-typed-db.git"
-rev = "c4e35cae3a1eb6ef78c71a88b1fc5865120f3ed7"
+rev = "c529c5754b0ecec8367ada2b9fbbe4cf17165bdd"
 
 [dependencies]
 base64 = "0.20.0"
@@ -48,6 +47,7 @@ toml = "0.5.10"
 tower-service = "0.3.2"
 tracing = "0.1.37"
 form_urlencoded = "1.1.0"
+latin1str = "0.1.3"
 
 [dependencies.clap]
 version = "4.0.29"
