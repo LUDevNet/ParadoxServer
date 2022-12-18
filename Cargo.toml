@@ -31,38 +31,38 @@ git = "https://github.com/Xiphoseer/paradox-typed-db.git"
 rev = "c4e35cae3a1eb6ef78c71a88b1fc5865120f3ed7"
 
 [dependencies]
-base64 = "0.13"
-futures-util = "0.3.21"
+base64 = "0.20.0"
+futures-util = "0.3.25"
 pretty_env_logger = "0.4.0"
-http = "0.2.2"
+http = "0.2.8"
 http-body = "0.4.5"
 mapr = "0.8.0"
 notify = "5.0.0"
-openapiv3 = "0.5"
-percent-encoding = "2.1.0"
-pin-project = "1.0"
-regex = "1.4"
-serde_json = "1.0.83"
-serde_yaml = "0.8"
-toml = "0.5"
+openapiv3 = "1.0.2"
+percent-encoding = "2.2.0"
+pin-project = "1.0.12"
+regex = "1.7.0"
+serde_json = "1.0.91"
+serde_yaml = "0.9.16"
+toml = "0.5.10"
 tower-service = "0.3.2"
-tracing = "0.1"
-form_urlencoded = "1.0.1"
+tracing = "0.1.37"
+form_urlencoded = "1.1.0"
 
 [dependencies.clap]
-version = "3.2.16"
+version = "4.0.29"
 features = ["derive"]
 
 [dependencies.hyper]
-version = "0.14"
+version = "0.14.23"
 features = ["server", "runtime", "http1", "http2"]
 
 [dependencies.tower]
-version = "0.4.1"
+version = "0.4.13"
 features = ["make", "util"]
 
 [dependencies.tower-http]
-version = "0.3.4"
+version = "0.3.5"
 features = ["fs", "auth", "trace", "cors"]
 
 [dependencies.color-eyre]
@@ -71,17 +71,17 @@ default-features = false
 
 # Holds data in insertion order
 [dependencies.linked-hash-map]
-version = "0.5.3"
+version = "0.5.6"
 features = ["serde_impl"]
 
 [dependencies.tokio]
-version = "1"
+version = "1.23.0"
 features = ["rt-multi-thread", "macros", "signal"]
 
 [dependencies.serde]
-version = "1"
+version = "1.0.151"
 features = ["derive"]
 
 [build-dependencies]
-openapiv3 = "0.5"
-serde_yaml = "0.8"
+openapiv3 = "1.0.2"
+serde_yaml = "0.9.16"
