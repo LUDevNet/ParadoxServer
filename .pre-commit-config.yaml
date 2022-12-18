@@ -1,0 +1,11 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Cargo Formatter
+        language: system
+        entry: cargo
+        args: [fmt]
+        pass_filenames: false
+        always_run: true
+        files: "\\.rs$"
