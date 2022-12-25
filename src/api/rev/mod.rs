@@ -100,6 +100,12 @@ impl Service<(super::Accept, Route)> for RevService {
             Route::SkillById(skill_id) => {
                 super::reply(a, &skills::rev_skill_id(self.db, self.rev, skill_id))
             }
+            Route::SkillCooldownGroups => {
+                super::reply(a, &Keys::new(&self.rev.skill_cooldown_groups))
+            }
+            Route::SkillCooldownGroupById(id) => {
+                super::reply_opt(a, self.rev.skill_cooldown_groups.get(&id))
+            }
             Route::GateVersions => super::reply(a, &self.rev.gate_versions.keys()),
             Route::GateVersionByName(name) => {
                 super::reply_opt(a, self.rev.gate_versions.get(&name.0))

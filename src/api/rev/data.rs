@@ -202,9 +202,15 @@ impl serde::Serialize for GateVersionsUse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SkillCooldownGroup {
+    skills: BTreeSet<i32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
+    pub skill_cooldown_groups: BTreeMap<i32, SkillCooldownGroup>,
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
@@ -222,6 +228,7 @@ impl ReverseLookup {
         let time = Instant::now();
         info!("Starting to load ReverseLookup");
         let mut skill_ids: HashMap<i32, SkillIdLookup> = HashMap::new();
+        let mut skill_cooldown_groups = BTreeMap::<i32, SkillCooldownGroup>::new();
         let mut mission_task_uids = HashMap::new();
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
@@ -571,6 +578,14 @@ impl ReverseLookup {
                     .skills
                     .insert(skid);
             }
+
+            if let Some(cooldowngroup) = skill.cooldowngroup() {
+                skill_cooldown_groups
+                    .entry(cooldowngroup)
+                    .or_default()
+                    .skills
+                    .insert(skid);
+            }
         }
 
         for row in db.speedchat_menu.row_iter() {
@@ -631,6 +646,7 @@ impl ReverseLookup {
         Self {
             behaviors,
             skill_ids,
+            skill_cooldown_groups,
             mission_task_uids,
             mission_types,
             factions,

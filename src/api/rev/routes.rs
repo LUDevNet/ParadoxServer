@@ -37,6 +37,8 @@ pub(crate) enum Route {
     ObjectTypes,
     ObjectTypeByName(PercentDecoded),
     SkillById(i32),
+    SkillCooldownGroups,
+    SkillCooldownGroupById(i32),
     GateVersions,
     GateVersionByName(PercentDecoded),
 }
@@ -202,6 +204,24 @@ impl Route {
                 },
             },
             Some("skill_ids" | "skills") => match parts.next() {
+                Some("cooldowngroups") => match parts.next() {
+                    None => Ok(Self::SkillCooldownGroups),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::SkillCooldownGroups),
+                        Some(_) => Err(()),
+                    },
+                    Some(key) => match key.parse() {
+                        Ok(id) => match parts.next() {
+                            None => Ok(Self::SkillCooldownGroupById(id)),
+                            Some("") => match parts.next() {
+                                None => Ok(Self::SkillCooldownGroupById(id)),
+                                Some(_) => Err(()),
+                            },
+                            Some(_) => Err(()),
+                        },
+                        Err(_) => Err(()),
+                    },
+                },
                 Some(key) => match key.parse() {
                     Ok(id) => match parts.next() {
                         None => Ok(Self::SkillById(id)),
