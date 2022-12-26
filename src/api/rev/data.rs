@@ -551,10 +551,12 @@ impl ReverseLookup {
             }
         }
 
-        for row in db.rebuild_sections.row_iter() {
-            let id = row.id();
-            let lot = row.object_id();
-            objects.r(lot).rebuild_sections.insert(id);
+        if let Some(rebuild_sections) = &db.rebuild_sections {
+            for row in rebuild_sections.row_iter() {
+                let id = row.id();
+                let lot = row.object_id();
+                objects.r(lot).rebuild_sections.insert(id);
+            }
         }
 
         for row in db.reward_codes.row_iter() {

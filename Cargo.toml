@@ -8,11 +8,11 @@ edition = "2018"
 version = "0.3.1"
 
 #[dependencies.assembly-maps]
-#git = "https://github.com/Xiphoseer/assembly_rs.git"
-#rev = "258fc31e2c50713912f54717871f2915617b7db4"
+#git = "https://github.com/LUDevNet/Assembly.git"
+#rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
 
 [dependencies.assembly-pack]
-git = "https://github.com/Xiphoseer/assembly_rs.git"
+git = "https://github.com/LUDevNet/Assembly.git"
 rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
 features = ["pki"]
 
@@ -22,12 +22,12 @@ default-features = false
 features = ["serde"]
 
 [dependencies.assembly-xml]
-git = "https://github.com/Xiphoseer/assembly_rs.git"
+git = "https://github.com/LUDevNet/Assembly.git"
 rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
 
 [dependencies.paradox-typed-db]
-git = "https://github.com/Xiphoseer/paradox-typed-db.git"
-rev = "c529c5754b0ecec8367ada2b9fbbe4cf17165bdd"
+git = "https://github.com/LUDevNet/paradox-typed-db.git"
+rev = "d36941a33d16fbf2c5990bb0767a7e4ae3966da2"
 
 [dependencies]
 base64 = "0.20.0"
