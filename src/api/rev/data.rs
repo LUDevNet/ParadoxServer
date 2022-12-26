@@ -18,7 +18,7 @@ use std::{
 use latin1str::Latin1Str;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
-use tracing::info;
+use tracing::{info, log};
 
 use crate::{
     api::adapter::{Filtered, Keys},
@@ -227,9 +227,16 @@ pub struct MissionRevItemComponents {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+pub struct MissionRevMissions {
+    /// Set of `Missions` that require this mission in some way
+    pub prereq_for: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct MissionRev {
     pub collectible_components: MissionRevCollectibleComponents,
     pub item_components: MissionRevItemComponents,
+    pub missions: MissionRevMissions,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -496,6 +503,30 @@ impl ReverseLookup {
                     .get_or_default(gate_version)
                     .missions
                     .insert(id);
+            }
+
+            if let Some(prereq) = m.prereq_mission_id() {
+                if !prereq.is_empty() {
+                    let decoded = prereq.decode();
+                    for all_of in decoded.split(&['&', ',']).map(str::trim) {
+                        let all_of = all_of.strip_prefix('(').unwrap_or(all_of);
+                        let all_of = all_of.strip_suffix(')').unwrap_or(all_of);
+                        for any_of in all_of.split('|').map(str::trim) {
+                            let prereq_id =
+                                any_of.split_once(':').map(|(id, _)| id).unwrap_or(any_of);
+                            if let Ok(prereq_id) = prereq_id.parse::<i32>() {
+                                missions
+                                    .entry(prereq_id)
+                                    .or_default()
+                                    .missions
+                                    .prereq_for
+                                    .insert(id);
+                            } else {
+                                log::warn!("Invalid mission id {}", id);
+                            }
+                        }
+                    }
+                }
             }
 
             for lot in [
