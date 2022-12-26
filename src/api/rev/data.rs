@@ -207,6 +207,17 @@ pub struct SkillCooldownGroup {
     skills: BTreeSet<i32>,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MissionRevCollectibleComponents {
+    /// Set of `CollectibleComponents` this mission is mentioned as `requirement_mission`
+    requirement_for: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MissionRev {
+    collectible_components: MissionRevCollectibleComponents,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReverseLookup {
     pub mission_task_uids: HashMap<i32, MissionTaskUIDLookup>,
@@ -214,6 +225,7 @@ pub struct ReverseLookup {
     pub skill_ids: HashMap<i32, SkillIdLookup>,
     pub behaviors: BTreeMap<i32, BehaviorKeyIndex>,
     pub mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>>,
+    pub missions: BTreeMap<i32, MissionRev>,
     pub factions: BTreeMap<i32, FactionRev>,
     pub objects: ObjectsRevData,
     pub object_types: BTreeMap<String, Vec<i32>>,
@@ -233,6 +245,7 @@ impl ReverseLookup {
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
         let mut objects = ObjectsRevData::default();
+        let mut missions = BTreeMap::<i32, MissionRev>::new();
 
         for a in db.activities.row_iter() {
             let id = a.activity_id();
@@ -253,6 +266,17 @@ impl ReverseLookup {
                     .or_default()
                     .used_by
                     .insert(behavior_id);
+            }
+        }
+
+        for collectible in db.collectible_component.row_iter() {
+            if let Some(mission_id) = collectible.requirement_mission() {
+                missions
+                    .entry(mission_id)
+                    .or_default()
+                    .collectible_components
+                    .requirement_for
+                    .insert(collectible.id());
             }
         }
 
@@ -651,6 +675,7 @@ impl ReverseLookup {
             skill_cooldown_groups,
             mission_task_uids,
             mission_types,
+            missions,
             factions,
             objects,
             object_types,

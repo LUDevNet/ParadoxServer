@@ -27,6 +27,8 @@ pub(crate) enum Route {
     Factions,
     FactionById(i32),
     LootTableIndexById(i32),
+    Missions,
+    MissionById(i32),
     MissionTypes,
     MissionTypesFull,
     MissionTypeByTy(PercentDecoded),
@@ -156,8 +158,23 @@ impl Route {
             },
             Some("mission_types" | "mission-types") => Self::mission_types_from_parts(parts),
             Some("missions") => match parts.next() {
+                None => Ok(Self::Missions),
+                Some("") => match parts.next() {
+                    None => Ok(Self::Missions),
+                    _ => Err(()),
+                },
                 Some("types") => Self::mission_types_from_parts(parts),
-                _ => Err(()),
+                Some(key) => match key.parse() {
+                    Ok(id) => match parts.next() {
+                        None => Ok(Self::MissionById(id)),
+                        Some("") => match parts.next() {
+                            None => Ok(Self::MissionById(id)),
+                            _ => Err(()),
+                        },
+                        _ => Err(()),
+                    },
+                    Err(_) => Err(()),
+                },
             },
             Some("objects") => match parts.next() {
                 None => Ok(Self::Objects),
