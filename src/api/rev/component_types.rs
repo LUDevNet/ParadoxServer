@@ -18,7 +18,7 @@ pub(super) struct Components<'a> {
 impl<'a> Components<'a> {
     pub fn new(rev: &'a ReverseLookup) -> Self {
         Self {
-            components: Keys::new(&rev.component_use),
+            components: Keys::new(&rev.component_use.0),
         }
     }
 }
@@ -28,8 +28,7 @@ pub(super) fn rev_component_type<'r, 'db, 'd>(
     rev: &'r ReverseLookup,
     key: i32,
 ) -> Option<Api<&'r ComponentsUse, ObjectTypeEmbedded<'db, 'd, Vec<i32>>>> {
-    let val = rev.component_use.get(&key);
-    val.map(|data: &'r ComponentsUse| {
+    rev.component_use.ty(key).map(|data: &'r ComponentsUse| {
         // FIXME: improve this
         let keys: Vec<i32> = data
             .components
@@ -49,6 +48,6 @@ pub(super) fn rev_single_component(
     cid: i32,
 ) -> Option<&ComponentUse> {
     rev.component_use
-        .get(&key)
+        .ty(key)
         .and_then(|c| c.components.get(&cid))
 }

@@ -4,7 +4,10 @@ use serde::Serialize;
 
 use crate::api::adapter::Filtered2;
 
-use super::{data::ComponentUse, ReverseLookup};
+use super::{
+    data::{ComponentUse, COMPONENT_ID_DESTRUCTIBLE},
+    ReverseLookup,
+};
 
 #[derive(Serialize)]
 struct FactionByIdEmbedded {
@@ -26,7 +29,11 @@ impl FactionById {
             destructible_list_ids: &frev.destructible_list,
             _embedded: FactionByIdEmbedded {
                 destructible_components: Filtered2 {
-                    inner: &rev.component_use.get(&7).unwrap().components,
+                    inner: &rev
+                        .component_use
+                        .ty(COMPONENT_ID_DESTRUCTIBLE)
+                        .unwrap()
+                        .components,
                     keys1: &frev.destructible,
                     keys2: &frev.destructible_list,
                 },

@@ -20,7 +20,10 @@ use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use tracing::info;
 
-use crate::{api::adapter::Keys, data::skill_system::match_action_key};
+use crate::{
+    api::adapter::{Filtered, Keys},
+    data::skill_system::match_action_key,
+};
 
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct SkillIdLookup {
@@ -50,6 +53,10 @@ pub struct ComponentsUse {
     /// Map from component_id to list of object_id
     pub components: BTreeMap<i32, ComponentUse>,
 }
+
+pub const COMPONENT_ID_DESTRUCTIBLE: i32 = 7;
+pub const COMPONENT_ID_ITEM: i32 = 11;
+pub const COMPONENT_ID_COLLECTIBLE: i32 = 23;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MissionTaskUIDLookup {
@@ -210,12 +217,43 @@ pub struct SkillCooldownGroup {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MissionRevCollectibleComponents {
     /// Set of `CollectibleComponents` this mission is mentioned as `requirement_mission`
-    requirement_for: BTreeSet<i32>,
+    pub requirement_for: BTreeSet<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MissionRevItemComponents {
+    /// Set of `CollectibleComponents` this mission is mentioned as `requirement_mission`
+    pub requirement_for: BTreeSet<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MissionRev {
-    collectible_components: MissionRevCollectibleComponents,
+    pub collectible_components: MissionRevCollectibleComponents,
+    pub item_components: MissionRevItemComponents,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ComponentRegistryRev(pub BTreeMap<i32, ComponentsUse>);
+
+impl ComponentRegistryRev {
+    pub fn ty_mut(&mut self, type_id: i32) -> &mut ComponentsUse {
+        self.0.entry(type_id).or_default()
+    }
+
+    pub fn ty(&self, type_id: i32) -> Option<&ComponentsUse> {
+        self.0.get(&type_id)
+    }
+
+    pub(crate) fn filter<K>(
+        &'static self,
+        type_id: i32,
+        keys: K,
+    ) -> Option<Filtered<BTreeMap<i32, ComponentUse>, K>> {
+        self.ty(type_id).map(|cu| Filtered {
+            inner: &cu.components,
+            keys,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,7 +267,7 @@ pub struct ReverseLookup {
     pub factions: BTreeMap<i32, FactionRev>,
     pub objects: ObjectsRevData,
     pub object_types: BTreeMap<String, Vec<i32>>,
-    pub component_use: BTreeMap<i32, ComponentsUse>,
+    pub component_use: ComponentRegistryRev,
     pub activities: BTreeMap<i32, ActivityRev>,
     pub loot_table_index: BTreeMap<i32, LootTableIndexRev>,
     pub gate_versions: GateVersionsUse,
@@ -280,12 +318,12 @@ impl ReverseLookup {
             }
         }
 
-        let mut component_use: BTreeMap<i32, ComponentsUse> = BTreeMap::new();
+        let mut component_use = ComponentRegistryRev::default();
         for creg in db.comp_reg.row_iter() {
             let id = creg.id();
             let ty = creg.component_type();
             let cid = creg.component_id();
-            let ty_entry = component_use.entry(ty).or_default();
+            let ty_entry = component_use.ty_mut(ty);
             let co_entry = ty_entry.components.entry(cid).or_default();
             co_entry.lots.push(id);
         }
@@ -374,6 +412,14 @@ impl ReverseLookup {
                 {
                     objects.r(lot).item_component.subitems.insert(id);
                 }
+            }
+            if let Some(req_achievement_id) = row.req_achievement_id() {
+                missions
+                    .entry(req_achievement_id)
+                    .or_default()
+                    .item_components
+                    .requirement_for
+                    .insert(id);
             }
         }
 

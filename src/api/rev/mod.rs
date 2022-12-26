@@ -83,7 +83,9 @@ impl Service<(super::Accept, Route)> for RevService {
                 &loot_table_index::rev_loop_table_index(self.db, self.rev, id),
             ),
             Route::Missions => super::reply(a, &Keys::new(&self.rev.missions)),
-            Route::MissionById(id) => super::reply_opt(a, self.rev.missions.get(&id)),
+            Route::MissionById(id) => {
+                super::reply_opt(a, missions::mission_by_id(self.rev, id).as_ref())
+            }
             Route::MissionTypes => super::reply(a, &missions::MissionTypesAdapter::new(self.rev)),
             Route::MissionTypesFull => super::reply(a, &self.rev.mission_types),
             Route::MissionTypeByTy(ty) => super::reply(

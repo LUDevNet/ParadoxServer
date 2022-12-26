@@ -1,13 +1,19 @@
-use std::{borrow::Borrow, collections::BTreeMap};
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use assembly_xml::localization::LocaleNode;
 use paradox_typed_db::{rows::MissionsRow, TypedDatabase};
 use serde::{ser::SerializeMap, Serialize};
 
-use super::ReverseLookup;
+use super::{
+    data::{ComponentUse, MissionRev, COMPONENT_ID_COLLECTIBLE, COMPONENT_ID_ITEM},
+    ReverseLookup,
+};
 use crate::{
     api::{
-        adapter::{I32Slice, IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
+        adapter::{Filtered, I32Slice, IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
         PercentDecoded,
     },
     data::locale::LocaleRoot,
@@ -159,4 +165,34 @@ pub(super) fn rev_mission_subtype<'a, 'b>(
     let s_key: &String = d_subtype.borrow();
     let mission_ids = t.get(s_key)?;
     Some(missions_reply(db, loc, mission_ids))
+}
+
+#[derive(Serialize)]
+pub struct MissionByIdEmbedded {
+    #[serde(rename = "ItemComponent")]
+    item_components: Filtered<BTreeMap<i32, ComponentUse>, &'static BTreeSet<i32>>,
+    #[serde(rename = "CollectibleComponent")]
+    collectible_components: Filtered<BTreeMap<i32, ComponentUse>, &'static BTreeSet<i32>>,
+}
+
+pub(crate) fn mission_by_id(
+    rev: &'static ReverseLookup,
+    id: i32,
+) -> Option<Api<&'static MissionRev, MissionByIdEmbedded>> {
+    rev.missions.get(&id).map(|data| Api {
+        data,
+        embedded: MissionByIdEmbedded {
+            item_components: rev
+                .component_use
+                .filter(COMPONENT_ID_ITEM, &data.item_components.requirement_for)
+                .unwrap(),
+            collectible_components: rev
+                .component_use
+                .filter(
+                    COMPONENT_ID_COLLECTIBLE,
+                    &data.collectible_components.requirement_for,
+                )
+                .unwrap(),
+        },
+    })
 }
