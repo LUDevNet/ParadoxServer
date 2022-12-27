@@ -24,9 +24,9 @@ pub(super) enum ValueSet<'req> {
 #[derive(Deserialize)]
 pub(super) struct TableQuery<'req_body, PKSet> {
     #[serde(default)]
-    pks: PKSet,
-    #[serde(borrow)]
-    columns: BTreeSet<&'req_body str>,
+    pub(super) pks: PKSet,
+    #[serde(borrow, default)]
+    pub(super) columns: BTreeSet<&'req_body str>,
 }
 
 impl<'req> TableQuery<'req, ValueSet<'req>> {

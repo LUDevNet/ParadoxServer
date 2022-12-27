@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    fmt,
     future::{ready, Ready},
     io,
     path::Path,
@@ -422,6 +423,7 @@ static ALLOW_GET_HEAD_QUERY: HeaderValue = HeaderValue::from_static("GET,HEAD,QU
 impl<ReqBody> Service<Request<ReqBody>> for ApiService
 where
     ReqBody: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
+    ReqBody::Error: fmt::Display,
 {
     type Error = ApiError;
     type Response = Response<hyper::Body>;
