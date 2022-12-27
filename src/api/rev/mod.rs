@@ -8,12 +8,10 @@ use self::{factions::FactionById, routes::REV_APIS};
 use super::adapter::Keys;
 use crate::data::locale::LocaleRoot;
 pub use data::ReverseLookup;
+use http::Method;
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
-use std::{
-    io,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
 use tower::Service;
 
 mod behaviors;
@@ -52,16 +50,23 @@ impl RevService {
     }
 }
 
-impl Service<(super::Accept, Route)> for RevService {
+impl Service<(super::Accept, Method, Route)> for RevService {
     type Response = http::Response<hyper::Body>;
-    type Error = io::Error;
+    type Error = super::ApiError;
     type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, (a, route): (super::Accept, Route)) -> Self::Future {
+    fn call(&mut self, (a, method, route): (super::Accept, Method, Route)) -> Self::Future {
+        if method != Method::GET || method != Method::HEAD {
+            // For now, only allow GET requests
+            return std::future::ready(Ok(super::reply_405(&super::ALLOW_GET_HEAD)));
+        }
+        if method == Method::HEAD {
+            return std::future::ready(Ok(super::reply_200(a)));
+        }
         let r = match route {
             Route::Base => super::reply_json(&REV_APIS),
             Route::Activities => super::reply(a, &Keys::new(&self.rev.activities)),

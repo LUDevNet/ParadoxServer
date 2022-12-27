@@ -9,9 +9,14 @@ use assembly_fdb::{
     value::{Context, Value, ValueType},
     FdbHash,
 };
+use hyper::body::Bytes;
 use latin1str::Latin1String;
 use linked_hash_map::LinkedHashMap;
 use serde::{ser::SerializeSeq, Serialize};
+
+use super::ApiError;
+
+mod query;
 
 struct RowIter<'a, C, R, FR>
 where
@@ -90,7 +95,7 @@ pub(super) fn table_def_json<'a>(
     }
 }
 
-pub(super) fn table_all_json<'a>(
+pub(super) fn table_all_get<'a>(
     db: Database<'a>,
     name: &str,
 ) -> Result<Option<impl Serialize + 'a>, CastError> {
@@ -104,6 +109,41 @@ pub(super) fn table_all_json<'a>(
             to_rows: move || t.row_iter(), /*.take(100) */
         }
     }))
+}
+
+pub(super) async fn table_all_query<'a, B>(
+    db: Database<'a>,
+    name: &str,
+    mut body: B,
+) -> Result<Option<impl Serialize + 'a>, ApiError>
+where
+    B: http_body::Body<Data = Bytes> + Unpin,
+{
+    let tables = db.tables()?;
+    let table = tables.by_name(name).transpose()?;
+
+    Ok(match table {
+        Some(t) => {
+            let pk_col = t.column_at(0).expect("Tables must have at least 1 column");
+            let body_data = match body.data().await {
+                Some(Ok(b)) => b,
+                Some(Err(_e)) => return Ok(None), // FIXME: 40X
+                None => return Ok(None),
+            };
+            let ty = pk_col.value_type();
+            let _req = match query::TableQuery::new(ty, body_data.as_ref()) {
+                Ok(v) => v,
+                Err(_e) => return Ok(None), // FIXME: 40X
+            };
+
+            Some(RowIter {
+                cols: t.column_iter(),
+                // FIXME: reintroduce cap
+                to_rows: move || t.row_iter(), /*.take(100) */
+            })
+        }
+        None => None,
+    })
 }
 
 struct FilteredRowIter<'a> {

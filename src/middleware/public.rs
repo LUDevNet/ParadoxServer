@@ -100,7 +100,10 @@ where
         async move {
             match fut.await {
                 Ok(response) => {
-                    if response.status() == StatusCode::NOT_FOUND {
+                    if matches!(
+                        response.status(),
+                        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+                    ) {
                         inner
                             .call(input)
                             .await

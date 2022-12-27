@@ -93,12 +93,13 @@ impl<A, P, S> BaseRouter<A, P, S> {
 impl<A, P, S, ReqBody, AResBody, PResBody, SResBody> Service<Request<ReqBody>>
     for BaseRouter<A, P, S>
 where
-    A: Service<Request<ReqBody>, Response = Response<AResBody>, Error = io::Error>,
+    A: Service<Request<ReqBody>, Response = Response<AResBody>>,
     P: Service<Request<ReqBody>, Response = Response<PResBody>, Error = io::Error>,
     S: Service<Request<ReqBody>, Response = Response<SResBody>, Error = io::Error>,
     A::Future: Send + 'static,
     P::Future: Send + 'static,
     S::Future: Send + 'static,
+    A::Error: Send + Into<io::Error>,
     ReqBody: HttpBody<Data = Bytes> + Send + 'static,
     ReqBody::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -109,7 +110,7 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if let Poll::Ready(poll) = self.api.poll_ready(cx) {
             if let Err(e) = poll {
-                return Poll::Ready(Err(e));
+                return Poll::Ready(Err(e.into()));
             }
             if let Poll::Ready(poll) = self.app.poll_ready(cx) {
                 if let Err(e) = poll {
@@ -150,8 +151,9 @@ where
                 return self
                     .api
                     .call(req)
-                    .map(|r: Result<A::Response, A::Error>| {
-                        r.map(|r| r.map(BaseRouterResponseBody::Api))
+                    .map(|r: Result<A::Response, A::Error>| match r {
+                        Ok(r) => Ok(r.map(BaseRouterResponseBody::Api)),
+                        Err(e) => Err(e.into()),
                     })
                     .boxed();
             }
