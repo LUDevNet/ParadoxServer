@@ -60,7 +60,7 @@ impl Service<(super::Accept, Method, Route)> for RevService {
     }
 
     fn call(&mut self, (a, method, route): (super::Accept, Method, Route)) -> Self::Future {
-        if method != Method::GET || method != Method::HEAD {
+        if method != Method::GET && method != Method::HEAD {
             // For now, only allow GET requests
             return std::future::ready(Ok(super::reply_405(&super::ALLOW_GET_HEAD)));
         }

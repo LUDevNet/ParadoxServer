@@ -1,14 +1,16 @@
 use std::{
     borrow::Cow,
+    collections::{btree_set, BTreeSet},
     fmt,
-    iter::{Cloned, Copied, Zip},
+    iter::{self, Cloned, Copied, Zip},
+    marker::PhantomData,
     num::{ParseFloatError, ParseIntError},
     slice::Iter,
 };
 
 use assembly_core::buffer::CastError;
 use assembly_fdb::{
-    mem::{Database, FieldIter, MemContext, Row, RowHeaderIter},
+    mem::{iter::TableRowIter, Bucket, Database, FieldIter, MemContext, Row, RowHeaderIter, Table},
     value::{Context, Value, ValueType},
     FdbHash,
 };
@@ -17,9 +19,28 @@ use latin1str::Latin1String;
 use linked_hash_map::LinkedHashMap;
 use serde::{ser::SerializeSeq, Serialize};
 
+use self::query::ValueSet;
+
 use super::ApiError;
 
 mod query;
+
+trait AsRowIter<'a> {
+    type AsIter<'b>: Iterator<Item = Row<'a>> + 'b
+    where
+        Self: 'b;
+    fn as_row_iter(&self) -> Self::AsIter<'_>;
+}
+
+impl<'a> AsRowIter<'a> for Table<'a> {
+    type AsIter<'b> = TableRowIter<'a>
+    where
+        Self: 'b;
+
+    fn as_row_iter(&self) -> Self::AsIter<'_> {
+        self.row_iter()
+    }
+}
 
 trait AsColValIter<'a> {
     type AsIter<'b>: Iterator<Item = ColValPair<'a>> + 'b
@@ -77,20 +98,19 @@ impl<'a, 'b> Iterator for PartialColValIter<'a, 'b> {
     }
 }
 
-struct RowIter<'a, R, FR, FC>
+struct RowIter<'a, FR, FC>
 where
-    R: Iterator<Item = Row<'a>>,
-    FR: Fn() -> R,
+    FR: AsRowIter<'a>,
     FC: AsColValIter<'a>,
 {
     to_rows: FR,
     to_cols: FC,
+    _p: PhantomData<&'a ()>,
 }
 
-impl<'a, R, FR, FC> Serialize for RowIter<'a, R, FR, FC>
+impl<'a, FR, FC> Serialize for RowIter<'a, FR, FC>
 where
-    R: Iterator<Item = Row<'a>>,
-    FR: Fn() -> R,
+    FR: AsRowIter<'a>,
     FC: AsColValIter<'a>,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -98,7 +118,7 @@ where
         S: serde::Serializer,
     {
         let mut s = serializer.serialize_seq(None)?;
-        for r in (self.to_rows)() {
+        for r in self.to_rows.as_row_iter() {
             let mut row = LinkedHashMap::new();
             for (col_name, field) in self.to_cols.as_cv_iter(r) {
                 row.insert(col_name, field);
@@ -163,7 +183,8 @@ pub(super) fn table_all_get<'a>(
         RowIter {
             to_cols,
             // FIXME: reintroduce cap
-            to_rows: move || t.row_iter(), /*.take(100) */
+            to_rows: t,
+            _p: PhantomData,
         }
     }))
 }
@@ -202,6 +223,7 @@ where
                     return Ok(None); // FIXME: 40X
                 }
             };
+            let buckets = _req.bucket_set(t.bucket_count());
             let names = t.column_iter().map(|c| c.name()).collect::<Vec<_>>();
 
             Some(RowIter {
@@ -217,17 +239,105 @@ where
                         .collect::<Vec<_>>(),
                     names,
                 },
-                // FIXME: reintroduce cap
-                to_rows: move || t.row_iter(), /*.take(100) */
+                to_rows: MultiPKFilterSpec {
+                    table: t,
+                    buckets,
+                    gate: _req.pks,
+                },
+                _p: PhantomData,
             })
         }
         None => None,
     })
 }
 
+struct MultiPKFilterSpec<'a> {
+    table: Table<'a>,
+    buckets: BTreeSet<usize>,
+    gate: ValueSet,
+}
+
+struct PartialBucketIter<'a, 'b> {
+    table: Table<'a>,
+    buckets: btree_set::Iter<'b, usize>,
+}
+
+impl<'a, 'b> Iterator for PartialBucketIter<'a, 'b> {
+    type Item = Bucket<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.buckets
+            .next()
+            .copied()
+            .and_then(|index| self.table.bucket_at(index))
+    }
+}
+
+fn bucket_row_iter(b: Bucket) -> RowHeaderIter<'_> {
+    b.row_iter()
+}
+
+impl<'a> AsRowIter<'a> for MultiPKFilterSpec<'a> {
+    type AsIter<'b> = MultiPKFilter<'a, 'b>
+    where
+        Self: 'b;
+
+    fn as_row_iter(&self) -> Self::AsIter<'_> {
+        MultiPKFilter {
+            unfiltered_rows: PartialBucketIter {
+                table: self.table,
+                buckets: self.buckets.iter(),
+            }
+            .flat_map(bucket_row_iter),
+            gate: &self.gate,
+        }
+    }
+}
+
+struct MultiPKFilter<'a, 'b> {
+    unfiltered_rows: iter::FlatMap<
+        PartialBucketIter<'a, 'b>,
+        RowHeaderIter<'a>,
+        fn(Bucket<'a>) -> RowHeaderIter<'a>,
+    >,
+    gate: &'b ValueSet,
+}
+
+impl<'a, 'b> Iterator for MultiPKFilter<'a, 'b> {
+    type Item = Row<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let row = self.unfiltered_rows.next()?;
+            let pk = row.field_at(0).unwrap();
+            if self.gate.contains(&pk) {
+                return Some(row);
+            }
+        }
+    }
+}
+
 struct FilteredRowIter<'a> {
     inner: RowHeaderIter<'a>,
     gate: Value<FastContext>,
+}
+
+struct FilteredRowIterSpec<'a> {
+    bucket: Bucket<'a>,
+    gate: Value<FastContext>,
+}
+
+impl<'a> AsRowIter<'a> for FilteredRowIterSpec<'a> {
+    type AsIter<'b> = FilteredRowIter<'a>
+    where
+        Self: 'b;
+
+    fn as_row_iter(&self) -> Self::AsIter<'_> {
+        FilteredRowIter {
+            inner: self.bucket.row_iter(),
+            gate: self.gate.clone(),
+        }
+    }
 }
 
 impl<'a> Iterator for FilteredRowIter<'a> {
@@ -295,19 +405,17 @@ pub(super) fn table_key_json<'a>(
     let index_field = table.column_at(0).unwrap();
     let index_field_type = index_field.value_type();
 
-    let pk_filter = match FastContext::parse_as(key, index_field_type) {
+    let gate = match FastContext::parse_as(key, index_field_type) {
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
 
-    let bucket_index = pk_filter.hash() as usize % table.bucket_count();
+    let bucket_index = gate.hash() as usize % table.bucket_count();
     let bucket = table.bucket_at(bucket_index).unwrap();
 
-    let to_cols: Vec<_> = table.column_iter().map(|c| c.name()).collect();
-    let to_rows = move || FilteredRowIter {
-        inner: bucket.row_iter(),
-        gate: pk_filter.clone(),
-    };
-
-    Ok(Some(RowIter { to_cols, to_rows }))
+    Ok(Some(RowIter {
+        to_cols: table.column_iter().map(|c| c.name()).collect::<Vec<_>>(),
+        to_rows: FilteredRowIterSpec { bucket, gate },
+        _p: PhantomData,
+    }))
 }
