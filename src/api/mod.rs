@@ -77,6 +77,9 @@ pub enum ApiError {
     Yaml(serde_yaml::Error),
 }
 
+pub type ApiResponse = Response<hyper::Body>;
+pub type ApiResult = Result<ApiResponse, ApiError>;
+
 impl From<CastError> for ApiError {
     fn from(value: CastError) -> Self {
         Self::DB(value)
@@ -105,19 +108,40 @@ impl From<ApiError> for io::Error {
     }
 }
 
+pub struct RestPath<'r>(Split<'r, char>);
+
+impl<'r> RestPath<'r> {
+    pub fn join(self, ch: char) -> String {
+        let mut key = String::new();
+        for part in self.0 {
+            if !key.is_empty() {
+                key.push(ch);
+            }
+            key.push_str(part);
+        }
+        key
+    }
+}
+
+impl<'r> fmt::Debug for RestPath<'r> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.clone()).finish()
+    }
+}
+
 #[derive(Debug)]
 enum ApiRoute<'r> {
     Tables,
     TableByName(&'r str),
     AllTableRows(&'r str),
     TableRowsByPK(&'r str, &'r str),
-    Locale(Split<'r, char>),
+    Locale(RestPath<'r>),
     Crc(u32),
     Rev(rev::Route),
     OpenApiV0,
     SwaggerUI,
     SwaggerUIRedirect,
-    Res(Split<'r, char>),
+    Res(RestPath<'r>),
 }
 
 impl<'r> ApiRoute<'r> {
@@ -141,7 +165,7 @@ impl<'r> ApiRoute<'r> {
                     },
                 },
             },
-            Some("locale") => Ok(Self::Locale(parts)),
+            Some("locale") => Ok(Self::Locale(RestPath(parts))),
             Some("rev") => rev::Route::from_parts(parts).map(ApiRoute::Rev),
             Some("crc") => match parts.next() {
                 Some(crc) => match crc.parse() {
@@ -164,7 +188,7 @@ impl<'r> ApiRoute<'r> {
                 None => Ok(Self::Tables),
                 _ => Err(()),
             },
-            Some("res") => Ok(Self::Res(parts)),
+            Some("res") => Ok(Self::Res(RestPath(parts))),
             _ => Err(()),
         }
     }
@@ -212,15 +236,15 @@ fn reply_static(body: &'static str) -> http::Response<hyper::Body> {
     r
 }
 
-fn reply_string(body: String, content_type: HeaderValue) -> http::Response<hyper::Body> {
-    let is_404 = body == "null";
+fn reply_string(
+    body: String,
+    content_type: HeaderValue,
+    status: StatusCode,
+) -> http::Response<hyper::Body> {
     let content_length = HeaderValue::from(body.len());
     let mut r = Response::new(hyper::Body::from(body));
 
-    if is_404 {
-        // FIXME: hack; handle T = Option<U> for 404 properly
-        *r.status_mut() = http::StatusCode::NOT_FOUND;
-    }
+    *r.status_mut() = status;
     r.headers_mut().append(CONTENT_LENGTH, content_length);
     r.headers_mut().append(CONTENT_TYPE, content_type);
     r
@@ -230,25 +254,35 @@ fn reply_opt<T: Serialize>(
     accept: Accept,
     v: Option<&T>,
 ) -> Result<http::Response<hyper::Body>, ApiError> {
-    v.map(|v| reply(accept, v))
+    v.map(|v| reply(accept, v, StatusCode::OK))
         .unwrap_or_else(|| Ok(reply_404()))
 }
 
-fn reply<T: Serialize>(accept: Accept, v: &T) -> Result<http::Response<hyper::Body>, ApiError> {
+fn reply<T: Serialize>(
+    accept: Accept,
+    v: &T,
+    status: StatusCode,
+) -> Result<http::Response<hyper::Body>, ApiError> {
     match accept {
-        Accept::Json => reply_json(v),
-        Accept::Yaml => reply_yaml(v),
+        Accept::Json => reply_json(v, status),
+        Accept::Yaml => reply_yaml(v, status),
     }
 }
 
-fn reply_json<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, ApiError> {
+fn reply_json<T: Serialize>(
+    v: &T,
+    status: StatusCode,
+) -> Result<http::Response<hyper::Body>, ApiError> {
     let body = serde_json::to_string(&v)?;
-    Ok(reply_string(body, APPLICATION_JSON))
+    Ok(reply_string(body, APPLICATION_JSON, status))
 }
 
-fn reply_yaml<T: Serialize>(v: &T) -> Result<http::Response<hyper::Body>, ApiError> {
+fn reply_yaml<T: Serialize>(
+    v: &T,
+    status: StatusCode,
+) -> Result<http::Response<hyper::Body>, ApiError> {
     let body = serde_yaml::to_string(&v)?;
-    Ok(reply_string(body, APPLICATION_YAML))
+    Ok(reply_string(body, APPLICATION_YAML, status))
 }
 
 /// Reply with a `200 OK` without any content
@@ -267,6 +301,28 @@ fn reply_404() -> http::Response<hyper::Body> {
     r.headers_mut().append(CONTENT_LENGTH, content_length);
     r.headers_mut().append(CONTENT_TYPE, APPLICATION_JSON);
     r
+}
+
+#[derive(Serialize)]
+pub struct ErrorPayload {
+    status: u16,
+    error: &'static str,
+    reason: String,
+}
+
+impl ErrorPayload {
+    pub fn new<R: fmt::Display>(status: StatusCode, error: &'static str, reason: R) -> Self {
+        Self {
+            status: status.as_u16(),
+            error,
+            reason: reason.to_string(),
+        }
+    }
+}
+
+fn reply_400(accept: Accept, error: &'static str, reason: impl fmt::Display) -> ApiResult {
+    let status = StatusCode::BAD_REQUEST;
+    reply(accept, &ErrorPayload::new(status, error, reason), status)
 }
 
 fn reply_405(allow: &HeaderValue) -> http::Response<hyper::Body> {
@@ -298,22 +354,6 @@ const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml
 #[allow(clippy::declare_interior_mutable_const)]
 const TEXT_HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
 
-async fn db_api_async<T: Serialize, Fun, Fut>(
-    db: Database<'static>,
-    accept: Accept,
-    f: Fun,
-) -> Result<Response<hyper::Body>, ApiError>
-where
-    Fut: Future<Output = Result<T, ApiError>> + 'static,
-    Fun: FnOnce(Database<'static>) -> Fut,
-{
-    let v = f(db).await?;
-    match accept {
-        Accept::Json => reply_json(&v),
-        Accept::Yaml => reply_yaml(&v),
-    }
-}
-
 impl ApiService {
     #[allow(clippy::too_many_arguments)] // FIXME
     pub(crate) fn new(
@@ -343,18 +383,26 @@ impl ApiService {
         accept: Accept,
         f: impl FnOnce(Database<'static>) -> Result<T, CastError>,
     ) -> Result<Response<hyper::Body>, ApiError> {
-        let v = f(self.db)?;
-        match accept {
-            Accept::Json => reply_json(&v),
-            Accept::Yaml => reply_yaml(&v),
-        }
+        reply(accept, &f(self.db)?, StatusCode::OK)
+    }
+
+    fn db_api_opt<T: Serialize>(
+        &self,
+        accept: Accept,
+        f: impl FnOnce(Database<'static>) -> Result<Option<T>, CastError>,
+    ) -> Result<Response<hyper::Body>, ApiError> {
+        reply_opt(accept, f(self.db)?.as_ref())
     }
 
     /// Get data from `locale.xml`
-    fn locale(&self, accept: Accept, rest: Split<char>) -> Result<Response<hyper::Body>, ApiError> {
+    fn locale(&self, accept: Accept, rest: RestPath) -> Result<Response<hyper::Body>, ApiError> {
         match locale::select_node(self.locale_root.root.as_ref(), rest) {
-            Some((node, locale::Mode::All)) => reply(accept, &locale::All::new(node)),
-            Some((node, locale::Mode::Pod)) => reply(accept, &locale::Pod::new(node)),
+            Some((node, locale::Mode::All)) => {
+                reply(accept, &locale::All::new(node), StatusCode::OK)
+            }
+            Some((node, locale::Mode::Pod)) => {
+                reply(accept, &locale::Pod::new(node), StatusCode::OK)
+            }
             None => Ok(reply_404()),
         }
     }
@@ -366,21 +414,17 @@ impl ApiService {
         Ok(r)
     }
 
-    fn res_request(
-        &self,
-        accept: Accept,
-        rest: Split<char>,
-    ) -> ApiFuture<Result<Response<hyper::Body>, ApiError>> {
+    fn res_request(&self, accept: Accept, rest: RestPath) -> ApiFuture {
         ApiFuture::boxed({
             let sender = self.res.clone();
             let mut bytes = Vec::new();
-            for part in rest {
+            for part in rest.0 {
                 bytes.push(b'\\');
                 bytes.extend_from_slice(part.as_bytes());
             }
             async move {
                 match sender.request(Bytes::from(bytes)).await {
-                    Ok(v) => reply(accept, &v),
+                    Ok(v) => reply(accept, &v, StatusCode::OK),
                     Err(()) => Ok(reply_404()),
                 }
             }
@@ -391,23 +435,23 @@ impl ApiService {
 const SWAGGER_UI_HTML: &str = include_str!("../../res/api.html");
 
 #[pin_project(project = ApiFutureProj)]
-pub enum ApiFuture<T> {
-    Ready(#[pin] Ready<T>),
-    Boxed(#[pin] BoxFuture<'static, T>),
+pub enum ApiFuture {
+    Ready(#[pin] Ready<ApiResult>),
+    Boxed(#[pin] BoxFuture<'static, ApiResult>),
 }
 
-impl<T> ApiFuture<T> {
-    pub fn ready(value: T) -> Self {
+impl ApiFuture {
+    pub fn ready(value: ApiResult) -> Self {
         Self::Ready(ready(value))
     }
 
-    pub fn boxed(f: impl Future<Output = T> + Send + 'static) -> Self {
+    pub fn boxed(f: impl Future<Output = ApiResult> + Send + 'static) -> Self {
         Self::Boxed(f.boxed())
     }
 }
 
-impl<T> std::future::Future for ApiFuture<T> {
-    type Output = T;
+impl std::future::Future for ApiFuture {
+    type Output = ApiResult;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         match self.project() {
@@ -426,8 +470,8 @@ where
     ReqBody::Error: fmt::Display,
 {
     type Error = ApiError;
-    type Response = Response<hyper::Body>;
-    type Future = ApiFuture<Result<Self::Response, Self::Error>>;
+    type Response = ApiResponse;
+    type Future = ApiFuture;
 
     fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -456,23 +500,32 @@ where
                 self.db_api(accept, |db| tables::table_def_json(db, name))
             }
             (method, ApiRoute::AllTableRows(name)) => match method.as_str() {
-                "GET" => self.db_api(accept, |db| tables::table_all_get(db, name)),
+                "GET" => self.db_api_opt(accept, |db| tables::table_all_get(db, name)),
                 "QUERY" => {
                     let name = name.to_owned();
-                    return ApiFuture::boxed(db_api_async(self.db, accept, move |db| async move {
-                        tables::table_all_query(db, &name, body).await
-                    }));
+                    let db = self.db;
+                    return ApiFuture::boxed(async move {
+                        tables::table_all_query(db, accept, &name, body).await
+                    });
                 }
                 _ => Ok(reply_405(&ALLOW_GET_HEAD_QUERY)),
             },
             (Method::GET, ApiRoute::TableRowsByPK(name, key)) => {
-                self.db_api(accept, |db| tables::table_key_json(db, name, key))
+                self.db_api_opt(accept, |db| tables::table_key_json(db, name, key))
             }
-            (Method::GET, ApiRoute::Locale(rest)) => self.locale(accept, rest),
-            (Method::GET, ApiRoute::OpenApiV0) => reply_json(self.openapi.as_ref()),
+            (method, ApiRoute::Locale(rest)) => match method {
+                Method::GET => self.locale(accept, rest),
+                m if m.as_str() == "QUERY" => {
+                    return locale::locale_query(&self.locale_root, accept, rest, body)
+                }
+                _ => Ok(reply_405(&ALLOW_GET_HEAD_QUERY)),
+            },
+            (Method::GET, ApiRoute::OpenApiV0) => reply_json(self.openapi.as_ref(), StatusCode::OK),
             (Method::GET, ApiRoute::SwaggerUI) => Ok(reply_static(SWAGGER_UI_HTML)),
             (Method::GET, ApiRoute::SwaggerUIRedirect) => self.swagger_ui_redirect(),
-            (Method::GET, ApiRoute::Crc(crc)) => reply(accept, &self.pack.lookup(crc)),
+            (Method::GET, ApiRoute::Crc(crc)) => {
+                reply(accept, &self.pack.lookup(crc), StatusCode::OK)
+            }
             (method, ApiRoute::Rev(route)) => {
                 return ApiFuture::Ready(self.rev.call((accept, method, route)))
             }

@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use assembly_xml::localization::LocaleNode;
+use assembly_xml::localization::{Key, LocaleNode};
 use paradox_typed_db::{rows::MissionsRow, TypedDatabase};
 use serde::{ser::SerializeMap, Serialize};
 
@@ -65,12 +65,14 @@ struct MissionLocale<'b> {
 
 impl<'b> MissionLocale<'b> {
     pub fn new(node: &'b LocaleNode, keys: &'b [i32]) -> Self {
+        let key_mission_text: Key = Key::from_str("MissionText").unwrap();
+        let key_missions: Key = Key::from_str("Missions").unwrap();
         Self {
             mission_text: LocaleTableAdapter::new(
-                node.str_children.get("MissionText").unwrap(),
+                node.str_children.get(&key_mission_text).unwrap(),
                 keys,
             ),
-            missions: LocaleTableAdapter::new(node.str_children.get("Missions").unwrap(), keys),
+            missions: LocaleTableAdapter::new(node.str_children.get(&key_missions).unwrap(), keys),
         }
     }
 }

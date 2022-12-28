@@ -10,11 +10,12 @@ use assembly_fdb::{
     value::{Context, Value, ValueType},
     FdbHash,
 };
+use http::StatusCode;
 use hyper::body::Bytes;
 use latin1str::Latin1String;
 use serde::Serialize;
 
-use super::ApiError;
+use super::{Accept, ApiResult};
 
 mod query;
 mod util;
@@ -76,49 +77,41 @@ pub(super) fn table_all_get<'a>(
 
 pub(super) async fn table_all_query<'a, B>(
     db: Database<'a>,
+    accept: Accept,
     name: &str,
-    mut body: B,
-) -> Result<Option<impl Serialize + 'a>, ApiError>
+    body: B,
+) -> ApiResult
 where
     B: http_body::Body<Data = Bytes> + Unpin,
     B::Error: fmt::Display,
 {
     let tables = db.tables()?;
-    let table = tables.by_name(name).transpose()?;
+    let Some(table) = tables.by_name(name).transpose()? else {
+        return Ok(super::reply_404());
+    };
 
-    Ok(match table {
-        Some(t) => {
-            let pk_col = t.column_at(0).expect("Tables must have at least 1 column");
-            let body_data = match body.data().await {
-                Some(Ok(b)) => b,
-                Some(Err(e)) => {
-                    tracing::warn!("{}", e);
-                    return Ok(None); // FIXME: 40X
-                }
-                None => {
-                    tracing::warn!("Missing Body Bytes");
-                    return Ok(None);
-                }
-            };
-            let ty = pk_col.value_type();
-            let _req = match query::TableQuery::new(ty, body_data.as_ref()) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("{}", e);
-                    return Ok(None); // FIXME: 40X
-                }
-            };
+    let pk_col = table
+        .column_at(0)
+        .expect("Tables must have at least 1 column");
+    let bytes = match hyper::body::to_bytes(body).await {
+        Ok(b) => b,
+        Err(e) => return super::reply_400(accept, "Failed to aggregate query body", e),
+    };
 
-            let names = t.column_iter().map(|c| c.name()).collect::<Vec<_>>();
-            let to_cols = util::PartialColValIterSpec::new(names, &_req.columns);
+    let ty = pk_col.value_type();
+    let _req = match query::TableQuery::new(ty, &bytes) {
+        Ok(v) => v,
+        Err(e) => return super::reply_400(accept, "Failed to parse query body", e),
+    };
 
-            Some(util::RowIter::<'a, _, _>::new(
-                util::MultiPKFilterSpec::new(t, _req.pks),
-                to_cols,
-            ))
-        }
-        None => None,
-    })
+    let names = table.column_iter().map(|c| c.name()).collect::<Vec<_>>();
+    let to_cols = util::PartialColValIterSpec::new(names, &_req.columns);
+
+    super::reply(
+        accept,
+        &util::RowIter::<'a, _, _>::new(util::MultiPKFilterSpec::new(table, _req.pks), to_cols),
+        StatusCode::OK,
+    )
 }
 
 struct FastContext;

@@ -8,7 +8,7 @@ use self::{factions::FactionById, routes::REV_APIS};
 use super::adapter::Keys;
 use crate::data::locale::LocaleRoot;
 pub use data::ReverseLookup;
-use http::Method;
+use http::{Method, StatusCode};
 use paradox_typed_db::TypedDatabase;
 use serde::Serialize;
 use std::task::{Context, Poll};
@@ -68,58 +68,85 @@ impl Service<(super::Accept, Method, Route)> for RevService {
             return std::future::ready(Ok(super::reply_200(a)));
         }
         let r = match route {
-            Route::Base => super::reply_json(&REV_APIS),
-            Route::Activities => super::reply(a, &Keys::new(&self.rev.activities)),
+            Route::Base => super::reply_json(&REV_APIS, StatusCode::OK),
+            Route::Activities => super::reply(a, &Keys::new(&self.rev.activities), StatusCode::OK),
             Route::ActivityById(id) => super::reply_opt(a, self.rev.activities.get(&id)),
-            Route::BehaviorById(id) => super::reply(a, &behaviors::lookup(self.db, self.rev, id)),
-            Route::ComponentTypes => super::reply(a, &component_types::Components::new(self.rev)),
+            Route::BehaviorById(id) => {
+                super::reply(a, &behaviors::lookup(self.db, self.rev, id), StatusCode::OK)
+            }
+            Route::ComponentTypes => super::reply(
+                a,
+                &component_types::Components::new(self.rev),
+                StatusCode::OK,
+            ),
             Route::ComponentTypeById(id) => super::reply(
                 a,
                 &component_types::rev_component_type(self.db, self.rev, id),
+                StatusCode::OK,
             ),
             Route::ComponentTypeByIdAndCid(key, cid) => super::reply(
                 a,
                 &component_types::rev_single_component(self.rev, key, cid),
+                StatusCode::OK,
             ),
-            Route::Factions => super::reply(a, &Keys::new(&self.rev.factions)),
-            Route::FactionById(id) => super::reply(a, &FactionById::new(self.rev, id)),
+            Route::Factions => super::reply(a, &Keys::new(&self.rev.factions), StatusCode::OK),
+            Route::FactionById(id) => {
+                super::reply(a, &FactionById::new(self.rev, id), StatusCode::OK)
+            }
             Route::LootTableIndexById(id) => super::reply(
                 a,
                 &loot_table_index::rev_loop_table_index(self.db, self.rev, id),
+                StatusCode::OK,
             ),
-            Route::Missions => super::reply(a, &Keys::new(&self.rev.missions)),
+            Route::Missions => super::reply(a, &Keys::new(&self.rev.missions), StatusCode::OK),
             Route::MissionById(id) => {
                 super::reply_opt(a, missions::mission_by_id(self.rev, id).as_ref())
             }
-            Route::MissionTypes => super::reply(a, &missions::MissionTypesAdapter::new(self.rev)),
-            Route::MissionTypesFull => super::reply(a, &self.rev.mission_types),
+            Route::MissionTypes => super::reply(
+                a,
+                &missions::MissionTypesAdapter::new(self.rev),
+                StatusCode::OK,
+            ),
+            Route::MissionTypesFull => super::reply(a, &self.rev.mission_types, StatusCode::OK),
             Route::MissionTypeByTy(ty) => super::reply(
                 a,
                 &missions::rev_mission_type(self.db, self.rev, &self.loc, ty),
+                StatusCode::OK,
             ),
             Route::MissionTypeBySubTy(d_type, d_subtype) => super::reply(
                 a,
                 &missions::rev_mission_subtype(self.db, self.rev, &self.loc, d_type, d_subtype),
+                StatusCode::OK,
             ),
-            Route::ObjectsSearchIndex => super::reply(a, &self.rev.objects.search_index),
-            Route::ObjectTypes => super::reply(a, &Keys::new(&self.rev.object_types)),
-            Route::ObjectTypeByName(ty) => {
-                super::reply(a, &object_types::rev_object_type(self.db, self.rev, ty))
+            Route::ObjectsSearchIndex => {
+                super::reply(a, &self.rev.objects.search_index, StatusCode::OK)
             }
-            Route::SkillById(skill_id) => {
-                super::reply(a, &skills::rev_skill_id(self.db, self.rev, skill_id))
+            Route::ObjectTypes => {
+                super::reply(a, &Keys::new(&self.rev.object_types), StatusCode::OK)
             }
-            Route::SkillCooldownGroups => {
-                super::reply(a, &Keys::new(&self.rev.skill_cooldown_groups))
-            }
+            Route::ObjectTypeByName(ty) => super::reply(
+                a,
+                &object_types::rev_object_type(self.db, self.rev, ty),
+                StatusCode::OK,
+            ),
+            Route::SkillById(skill_id) => super::reply(
+                a,
+                &skills::rev_skill_id(self.db, self.rev, skill_id),
+                StatusCode::OK,
+            ),
+            Route::SkillCooldownGroups => super::reply(
+                a,
+                &Keys::new(&self.rev.skill_cooldown_groups),
+                StatusCode::OK,
+            ),
             Route::SkillCooldownGroupById(id) => {
                 super::reply_opt(a, self.rev.skill_cooldown_groups.get(&id))
             }
-            Route::GateVersions => super::reply(a, &self.rev.gate_versions.keys()),
+            Route::GateVersions => super::reply(a, &self.rev.gate_versions.keys(), StatusCode::OK),
             Route::GateVersionByName(name) => {
                 super::reply_opt(a, self.rev.gate_versions.get(&name.0))
             }
-            Route::Objects => super::reply(a, &Keys::new(&self.rev.objects.rev)),
+            Route::Objects => super::reply(a, &Keys::new(&self.rev.objects.rev), StatusCode::OK),
             Route::ObjectById(id) => super::reply_opt(a, self.rev.objects.rev.get(&id)),
         };
         std::future::ready(r)

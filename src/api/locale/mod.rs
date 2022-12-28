@@ -1,12 +1,18 @@
 use std::{fmt, str};
 
-use assembly_xml::localization::LocaleNode;
+use assembly_xml::localization::{Key, LocaleNode};
+use http::StatusCode;
+use hyper::body::{Buf, Bytes};
 use serde::{
     ser::{SerializeMap, SerializeStruct},
     Serialize,
 };
 
-use super::adapter::Keys;
+use crate::data::locale::LocaleRoot;
+
+use self::query::{CompositeKey, IntOrKey, IntOrStr, IntStringSet};
+
+use super::{adapter::Keys, Accept, ApiFuture, RestPath};
 
 mod query;
 
@@ -129,28 +135,118 @@ pub(super) enum Mode {
     Pod,
 }
 
-fn node_child<'a>(node: &'a LocaleNode, key: &str) -> Option<&'a LocaleNode> {
+fn node_child(node: &LocaleNode, key: Key) -> Option<&LocaleNode> {
     if let Ok(key) = key.parse() {
         node.int_children.get(&key)
     } else {
-        node.str_children.get(key)
+        node.str_children.get(&key)
     }
 }
 
 pub(super) fn select_node<'a>(
     mut node: &'a LocaleNode,
-    mut rest: str::Split<'_, char>,
+    mut rest: RestPath,
 ) -> Option<(&'a LocaleNode, Mode)> {
-    for seg in &mut rest {
-        if let Some(new) = node_child(node, seg) {
+    for seg in &mut rest.0 {
+        if let Some(new) = Key::from_str(seg)
+            .ok()
+            .and_then(|key| node_child(node, key))
+        {
             node = new;
             continue;
         }
-        return match (seg, rest.next()) {
+        return match (seg, rest.0.next()) {
             ("$all", None) => Some((node, Mode::All)),
             ("", None) => Some((node, Mode::Pod)),
             _ => None,
         };
     }
     Some((node, Mode::Pod))
+}
+
+struct Query<'l, 'q> {
+    layers: &'q [IntStringSet],
+    node: &'l LocaleNode,
+}
+
+fn node_get_vec<'l>(mut node: &'l LocaleNode, s: &CompositeKey) -> Option<&'l LocaleNode> {
+    for part in &s.parts {
+        let child = match part {
+            IntOrKey::Int(i) => node.int_children.get(i),
+            IntOrKey::Key(s) => node.str_children.get(s),
+        };
+        match child {
+            Some(child) => node = child,
+            None => return None,
+        }
+    }
+    Some(node)
+}
+
+impl<'l, 'q> Serialize for Query<'l, 'q> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if let Some((first, rest)) = self.layers.split_first() {
+            let int_nodes = first.int_keys.iter().filter_map(|int| {
+                self.node
+                    .int_children
+                    .get(int)
+                    .map(|n| (IntOrStr::Int(*int), n))
+            });
+            let str_nodes = first
+                .str_keys
+                .iter()
+                .filter_map(|s| self.node.str_children.get(s).map(|n| (IntOrStr::Str(s), n)));
+            let vec_nodes = first
+                .vec_keys
+                .iter()
+                .filter_map(|s| node_get_vec(self.node, s).map(|n| (IntOrStr::Str(&s.full), n)));
+            let nodes = int_nodes.chain(str_nodes).chain(vec_nodes);
+            serializer.collect_map(nodes.map(|(k, node)| (k, Query { layers: rest, node })))
+        } else if let Some(v) = &self.node.value {
+            serializer.serialize_str(v)
+        } else {
+            serializer.serialize_none()
+        }
+    }
+}
+
+/// Get data from `locale.xml`
+pub(super) fn locale_query<ReqBody>(
+    root: &LocaleRoot,
+    accept: Accept,
+    rest: RestPath,
+    body: ReqBody,
+) -> ApiFuture
+where
+    ReqBody: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
+    ReqBody::Error: fmt::Display,
+{
+    let key = rest.join('_');
+    let root = root.root.clone();
+    ApiFuture::boxed(async move {
+        let rdr = match hyper::body::aggregate(body).await {
+            Ok(buf) => buf.reader(),
+            Err(e) => {
+                return super::reply_400(accept, "Failed to decode body", e);
+            }
+        };
+        let query_layers: Vec<query::IntStringSet> = match serde_json::from_reader(rdr) {
+            Ok(q) => q,
+            Err(e) => {
+                return super::reply_400(accept, "Failed to parse body as JSON", e);
+            }
+        };
+        let rest = key.split('_');
+        let query = match select_node(root.as_ref(), RestPath(rest)) {
+            Some((node, _)) => Query {
+                layers: &query_layers[..],
+                node,
+            },
+            None => return Ok(super::reply_404()),
+        };
+        super::reply(accept, &query, StatusCode::OK)
+    })
 }
