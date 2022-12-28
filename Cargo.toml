@@ -70,11 +70,6 @@ features = ["fs", "auth", "trace", "cors"]
 version = "0.6.2"
 default-features = false
 
-# Holds data in insertion order
-[dependencies.linked-hash-map]
-version = "0.5.6"
-features = ["serde_impl"]
-
 [dependencies.tokio]
 version = "1.23.0"
 features = ["rt-multi-thread", "macros", "signal"]

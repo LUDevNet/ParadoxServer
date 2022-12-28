@@ -45,29 +45,9 @@ impl ValueSet {
                 .unwrap_or(false),
         }
     }
-}
-
-#[derive(Deserialize)]
-pub(super) struct TableQuery<'req_body, PKSet> {
-    #[serde(default)]
-    pub(super) pks: PKSet,
-    #[serde(borrow, default)]
-    pub(super) columns: BTreeSet<&'req_body str>,
-}
-
-impl<'req> TableQuery<'req, ValueSet> {
-    fn de<T: Default + Deserialize<'req>>(
-        body: &'req [u8],
-        f: impl FnOnce(T) -> ValueSet,
-    ) -> Result<Self, serde_json::Error> {
-        serde_json::from_slice::<TableQuery<'req, T>>(body).map(|tq| TableQuery {
-            pks: f(tq.pks),
-            columns: tq.columns,
-        })
-    }
 
     pub fn bucket_set(&self, bucket_count: usize) -> BTreeSet<usize> {
-        match &self.pks {
+        match self {
             ValueSet::Integer(s) => s
                 .iter()
                 .map(FdbHash::hash)
@@ -95,6 +75,26 @@ impl<'req> TableQuery<'req, ValueSet> {
                 .collect(),
             ValueSet::Float | ValueSet::VarChar | ValueSet::Nothing => BTreeSet::new(),
         }
+    }
+}
+
+#[derive(Deserialize)]
+pub(super) struct TableQuery<'req_body, PKSet> {
+    #[serde(default)]
+    pub(super) pks: PKSet,
+    #[serde(borrow, default)]
+    pub(super) columns: BTreeSet<&'req_body str>,
+}
+
+impl<'req> TableQuery<'req, ValueSet> {
+    fn de<T: Default + Deserialize<'req>>(
+        body: &'req [u8],
+        f: impl FnOnce(T) -> ValueSet,
+    ) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice::<TableQuery<'req, T>>(body).map(|tq| TableQuery {
+            pks: f(tq.pks),
+            columns: tq.columns,
+        })
     }
 
     pub fn new(ty: ValueType, body: &'req [u8]) -> Result<Self, serde_json::Error> {
