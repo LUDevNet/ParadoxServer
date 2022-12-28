@@ -484,7 +484,7 @@ where
 }
 
 /// Make the API
-pub(crate) fn service(
+pub fn service(
     cfg: &DataOptions,
     locale_root: LocaleRoot,
     auth_kind: AuthKind,

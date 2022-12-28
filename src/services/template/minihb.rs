@@ -5,6 +5,12 @@ pub struct Template {
     text: String,
 }
 
+impl Default for Template {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Template {
     pub fn new() -> Self {
         Self {

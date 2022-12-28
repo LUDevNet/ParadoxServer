@@ -125,12 +125,14 @@ pub struct Node {
     pub kind: NodeKind,
 }
 
+#[derive(Debug, Clone)]
 pub struct ServerNode {
     pub public: Node,
     /// server path, DO NOT SERIALIZE
     pub abs_path: PathBuf,
 }
 
+#[derive(Default, Debug, Clone)]
 pub struct Loader {
     /// Maps path CRCs to a node
     entries: BTreeMap<u32, ServerNode>,
@@ -140,13 +142,7 @@ pub struct Loader {
 
 impl Loader {
     pub fn new() -> Self {
-        Self {
-            entries: BTreeMap::new(),
-            pki: PackIndexFile {
-                archives: Vec::new(),
-                files: BTreeMap::new(),
-            },
-        }
+        Self::default()
     }
 
     pub fn get(&self, crc: u32) -> Option<&ServerNode> {

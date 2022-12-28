@@ -9,11 +9,13 @@ pub struct OpenApiService {
     inner: Arc<OpenAPI>,
 }
 
-impl OpenApiService {
-    pub fn as_ref(&self) -> &OpenAPI {
+impl AsRef<OpenAPI> for OpenApiService {
+    fn as_ref(&self) -> &OpenAPI {
         self.inner.as_ref()
     }
+}
 
+impl OpenApiService {
     pub fn new(url: &str, auth_kind: AuthKind) -> Result<Self, serde_yaml::Error> {
         let text = include_str!("../../res/api.yaml");
         let mut data: OpenAPI = serde_yaml::from_str(text)?;

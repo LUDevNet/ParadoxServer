@@ -53,7 +53,7 @@ impl fmt::Display for Error {
     }
 }
 
-pub(crate) fn app(
+pub fn app(
     cfg: &DataOptions,
     tydb: &'static TypedDatabase<'static>,
     locale_root: LocaleRoot,

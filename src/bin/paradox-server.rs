@@ -1,18 +1,17 @@
-use crate::{
-    api::rev::ReverseLookup,
-    auth::{AuthKind, Authorize},
-    config::{Config, Options},
-    data::locale::LocaleRoot,
-    middleware::{PublicOrLayer, RedirectLayer},
-    services::{BaseRouter, FallbackService},
-};
 use assembly_fdb::mem::Database;
 use assembly_xml::localization::load_locale;
 use clap::Parser;
 use color_eyre::eyre::{eyre, WrapErr};
 use hyper::server::Server;
 use mapr::Mmap;
-use middleware::CorsLayerExt;
+use paradox_server::{
+    api::{self, rev::ReverseLookup},
+    auth::{AuthKind, Authorize},
+    config::{Config, Options},
+    data::locale::LocaleRoot,
+    middleware::{CorsLayerExt, PublicOrLayer, RedirectLayer},
+    services::{self, BaseRouter, FallbackService},
+};
 use paradox_typed_db::TypedDatabase;
 use std::{
     fs::{self, File},
@@ -23,13 +22,6 @@ use tower_http::{
     auth::RequireAuthorizationLayer, cors::CorsLayer, services::ServeDir, trace::TraceLayer,
 };
 use tracing::log::LevelFilter;
-
-mod api;
-mod auth;
-mod config;
-mod data;
-mod middleware;
-mod services;
 
 fn load_db(path: &Path) -> color_eyre::Result<Database<'static>> {
     // Load the database file

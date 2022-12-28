@@ -13,7 +13,7 @@ version = "0.3.1"
 
 [dependencies.assembly-pack]
 git = "https://github.com/LUDevNet/Assembly.git"
-rev = "db25c0f397d7bd0f05354134eb16ae685a7505a4"
+rev = "e3a3299776852440f4e155284c7280a950ca80d0"
 features = ["pki"]
 
 [dependencies.assembly-fdb]

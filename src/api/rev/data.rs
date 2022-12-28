@@ -281,7 +281,7 @@ pub struct ReverseLookup {
 }
 
 impl ReverseLookup {
-    pub(crate) fn new(db: &'_ TypedDatabase<'_>) -> Self {
+    pub fn new(db: &'_ TypedDatabase<'_>) -> Self {
         let time = Instant::now();
         info!("Starting to load ReverseLookup");
         let mut skill_ids: HashMap<i32, SkillIdLookup> = HashMap::new();

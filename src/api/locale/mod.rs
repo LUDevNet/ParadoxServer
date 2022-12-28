@@ -8,6 +8,8 @@ use serde::{
 
 use super::adapter::Keys;
 
+mod query;
+
 #[derive(Debug)]
 pub(super) struct Pod<'a> {
     inner: &'a LocaleNode,
