@@ -460,17 +460,19 @@ impl ReverseLookup {
             }
         }
 
-        for row in db.jet_pack_pad_component.row_iter() {
-            let id = row.id();
-            if let Some(lot) = row.lot_warning_volume() {
-                objects
-                    .r(lot)
-                    .jet_pack_pad_component
-                    .lot_warning_volume
-                    .insert(id);
-            }
-            if let Some(lot) = row.lot_blocker() {
-                objects.r(lot).jet_pack_pad_component.lot_blocker.insert(id);
+        if let Some(jet_pack_pad_component) = &db.jet_pack_pad_component {
+            for row in jet_pack_pad_component.row_iter() {
+                let id = row.id();
+                if let Some(lot) = row.lot_warning_volume() {
+                    objects
+                        .r(lot)
+                        .jet_pack_pad_component
+                        .lot_warning_volume
+                        .insert(id);
+                }
+                if let Some(lot) = row.lot_blocker() {
+                    objects.r(lot).jet_pack_pad_component.lot_blocker.insert(id);
+                }
             }
         }
 
