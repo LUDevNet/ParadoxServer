@@ -661,7 +661,7 @@ impl ReverseLookup {
                 objects.r(lot).rebuild_sections.insert(id);
             }
         }
-        
+
         if let Some(reward_codes) = &db.reward_codes {
             for row in reward_codes.row_iter() {
                 let id = row.id();
@@ -701,7 +701,7 @@ impl ReverseLookup {
                 gate_versions.get_or_default(gate).speedchat_menu.insert(id);
             }
         }
-        
+
         if let Some(ug_behavior_sounds) = &db.ug_behavior_sounds {
             for row in ug_behavior_sounds.row_iter() {
                 let id = row.id();
@@ -713,7 +713,7 @@ impl ReverseLookup {
                 }
             }
         }
-        
+
         if let Some(whats_cool_item_spotlight) = &db.whats_cool_item_spotlight {
             for row in whats_cool_item_spotlight.row_iter() {
                 let id = row.id();
