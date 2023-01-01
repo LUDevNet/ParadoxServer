@@ -661,14 +661,16 @@ impl ReverseLookup {
                 objects.r(lot).rebuild_sections.insert(id);
             }
         }
-
-        for row in db.reward_codes.row_iter() {
-            let id = row.id();
-            if let Some(gate) = row.gate_version() {
-                gate_versions.get_or_default(gate).reward_codes.insert(id);
-            }
-            if let Some(lot) = row.attachment_lot() {
-                objects.r(lot).reward_codes.insert(id);
+        
+        if let Some(reward_codes) = &db.reward_codes {
+            for row in reward_codes.row_iter() {
+                let id = row.id();
+                if let Some(gate) = row.gate_version() {
+                    gate_versions.get_or_default(gate).reward_codes.insert(id);
+                }
+                if let Some(lot) = row.attachment_lot() {
+                    objects.r(lot).reward_codes.insert(id);
+                }
             }
         }
 
@@ -699,44 +701,52 @@ impl ReverseLookup {
                 gate_versions.get_or_default(gate).speedchat_menu.insert(id);
             }
         }
-
-        for row in db.ug_behavior_sounds.row_iter() {
-            let id = row.id();
-            if let Some(gate) = row.gate_version() {
-                gate_versions
-                    .get_or_default(gate)
-                    .ug_behavior_sounds
-                    .insert(id);
+        
+        if let Some(ug_behavior_sounds) = &db.ug_behavior_sounds {
+            for row in ug_behavior_sounds.row_iter() {
+                let id = row.id();
+                if let Some(gate) = row.gate_version() {
+                    gate_versions
+                        .get_or_default(gate)
+                        .ug_behavior_sounds
+                        .insert(id);
+                }
+            }
+        }
+        
+        if let Some(whats_cool_item_spotlight) = &db.whats_cool_item_spotlight {
+            for row in whats_cool_item_spotlight.row_iter() {
+                let id = row.id();
+                if let Some(gate) = row.gate_version() {
+                    gate_versions
+                        .get_or_default(gate)
+                        .whats_cool_item_spotlight
+                        .insert(id);
+                }
             }
         }
 
-        for row in db.whats_cool_item_spotlight.row_iter() {
-            let id = row.id();
-            if let Some(gate) = row.gate_version() {
-                gate_versions
-                    .get_or_default(gate)
-                    .whats_cool_item_spotlight
-                    .insert(id);
+        if let Some(whats_cool_news_and_tips) = &db.whats_cool_news_and_tips {
+            for row in whats_cool_news_and_tips.row_iter() {
+                let id = row.id();
+                if let Some(gate) = row.gate_version() {
+                    gate_versions
+                        .get_or_default(gate)
+                        .whats_cool_news_and_tips
+                        .insert(id);
+                }
             }
         }
 
-        for row in db.whats_cool_news_and_tips.row_iter() {
-            let id = row.id();
-            if let Some(gate) = row.gate_version() {
+        if let Some(zone_loading_tips) = &db.zone_loading_tips {
+            for row in zone_loading_tips.row_iter() {
+                let id = row.id();
+                let gate = row.gate_version();
                 gate_versions
                     .get_or_default(gate)
-                    .whats_cool_news_and_tips
+                    .zone_loading_tips
                     .insert(id);
             }
-        }
-
-        for row in db.zone_loading_tips.row_iter() {
-            let id = row.id();
-            let gate = row.gate_version();
-            gate_versions
-                .get_or_default(gate)
-                .zone_loading_tips
-                .insert(id);
         }
 
         for row in db.zone_table.row_iter() {
