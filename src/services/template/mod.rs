@@ -1,4 +1,3 @@
-use assembly_xml::localization::Key;
 use color_eyre::eyre::Context;
 use http::{uri::PathAndQuery, Response};
 use notify::{
@@ -164,9 +163,8 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id
     let mut desc = String::new();
 
     let tasks = data.get_mission_tasks(id);
-    let mission_tasks_key = Key::from_str("MissionTasks").unwrap();
-    let description_key = Key::from_str("description").unwrap();
-    let tasks_locale = loc.root.str_children.get(&mission_tasks_key).unwrap();
+    let loc_keys = loc.root.keys();
+    let tasks_locale = loc.root.node().get_str(loc_keys.mission_tasks).unwrap();
     for task in tasks {
         if image.is_none() {
             if let Some(icon_id) = task.icon_id {
@@ -176,9 +174,9 @@ fn mission_get_impl(data: &'_ TypedDatabase<'_>, loc: LocaleRoot, res: LuRes, id
             }
         }
         if task.uid > 0 {
-            if let Some(node) = tasks_locale.int_children.get(&(task.uid as u32)) {
-                if let Some(node) = node.str_children.get(&description_key) {
-                    if let Some(string) = &node.value {
+            if let Some(node) = tasks_locale.get_int(task.uid as u32) {
+                if let Some(node) = node.get_str(loc_keys.description) {
+                    if let Some(string) = node.value() {
                         desc.push_str("- ");
                         desc.push_str(string);
                         desc.push('\n');

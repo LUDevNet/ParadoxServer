@@ -23,7 +23,7 @@ features = ["serde"]
 
 [dependencies.assembly-xml]
 git = "https://github.com/LUDevNet/Assembly.git"
-rev = "e2c28d9942fb889f428eacf07249ddb9ceee8e91"
+rev = "65b2563c861bcb63714aa1b94198864d6c9c1c93"
 
 [dependencies.paradox-typed-db]
 git = "https://github.com/LUDevNet/paradox-typed-db.git"

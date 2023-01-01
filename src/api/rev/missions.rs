@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use assembly_xml::localization::{Key, LocaleNode};
 use paradox_typed_db::{rows::MissionsRow, TypedDatabase};
 use serde::{ser::SerializeMap, Serialize};
 
@@ -16,7 +15,7 @@ use crate::{
         adapter::{Filtered, I32Slice, IdentityHash, LocaleTableAdapter, TypedTableIterAdapter},
         PercentDecoded,
     },
-    data::locale::LocaleRoot,
+    data::locale::{LocaleRoot, LocaleRootInner},
 };
 
 use super::{common::MissionsTaskIconsAdapter, Api};
@@ -64,15 +63,17 @@ struct MissionLocale<'b> {
 }
 
 impl<'b> MissionLocale<'b> {
-    pub fn new(node: &'b LocaleNode, keys: &'b [i32]) -> Self {
-        let key_mission_text: Key = Key::from_str("MissionText").unwrap();
-        let key_missions: Key = Key::from_str("Missions").unwrap();
+    pub fn new(root: &'b LocaleRootInner, keys: &'b [i32]) -> Self {
+        //let key_mission_text: Key = Key::from_str("MissionText").unwrap();
+        //let key_missions: Key = Key::from_str("Missions").unwrap();
+        let loc_keys = root.keys();
+        let node = root.node();
         Self {
             mission_text: LocaleTableAdapter::new(
-                node.str_children.get(&key_mission_text).unwrap(),
+                node.get_str(loc_keys.mission_text).unwrap(),
                 keys,
             ),
-            missions: LocaleTableAdapter::new(node.str_children.get(&key_missions).unwrap(), keys),
+            missions: LocaleTableAdapter::new(node.get_str(loc_keys.missions).unwrap(), keys),
         }
     }
 }

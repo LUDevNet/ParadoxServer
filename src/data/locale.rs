@@ -1,45 +1,78 @@
 use std::sync::Arc;
 
-use assembly_xml::localization::{Key, LocaleNode};
-use once_cell::sync::Lazy;
+use assembly_xml::localization::{Interner, Key, LocaleNodeRef, LocaleRoot as LocaleRootNode};
 use paradox_typed_db::ext::MissionKind;
+
+pub(crate) struct Keys {
+    pub description: Key,
+    pub missions: Key,
+    pub mission_text: Key,
+    pub mission_tasks: Key,
+    pub item_sets: Key,
+    pub kit_name: Key,
+    pub skill_behavior: Key,
+    pub description_ui: Key,
+    pub name: Key,
+}
+
+impl Keys {
+    fn try_new(strs: &Interner) -> Option<Self> {
+        Some(Keys {
+            description: strs.get("description")?,
+            missions: strs.get("Missions")?,
+            mission_text: strs.get("MissionText")?,
+            mission_tasks: strs.get("MissionTasks")?,
+            item_sets: strs.get("ItemSets")?,
+            kit_name: strs.get("kitName")?,
+            skill_behavior: strs.get("SkillBehavior")?,
+            description_ui: strs.get("descriptionUI")?,
+            name: strs.get("name")?,
+        })
+    }
+
+    pub fn new(strs: &Interner) -> Self {
+        Self::try_new(strs).expect("Missing some required locale keys") // FIXME: &mut Interner with intern
+    }
+}
+
+pub(crate) struct LocaleRootInner {
+    root: LocaleRootNode,
+    /// Well known keys
+    keys: Keys,
+}
+
+impl LocaleRootInner {
+    pub fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    pub fn node(&self) -> LocaleNodeRef<'_, '_> {
+        self.root.as_ref()
+    }
+}
 
 #[derive(Clone)]
 pub struct LocaleRoot {
-    pub root: Arc<LocaleNode>,
+    pub(crate) root: Arc<LocaleRootInner>,
 }
-
-struct Keys {
-    missions: Key,
-    item_sets: Key,
-    kit_name: Key,
-    skill_behavior: Key,
-    description_ui: Key,
-    name: Key,
-}
-
-static KEYS: Lazy<Keys> = Lazy::new(|| Keys {
-    missions: Key::from_str("Missions").unwrap(),
-    item_sets: Key::from_str("ItemSets").unwrap(),
-    kit_name: Key::from_str("kitName").unwrap(),
-    skill_behavior: Key::from_str("SkillBehavior").unwrap(),
-    description_ui: Key::from_str("descriptionUI").unwrap(),
-    name: Key::from_str("name").unwrap(),
-});
 
 impl LocaleRoot {
-    pub fn new(root_node: LocaleNode) -> Self {
+    pub fn new(root: LocaleRootNode) -> Self {
         Self {
-            root: Arc::new(root_node),
+            root: Arc::new(LocaleRootInner {
+                keys: Keys::new(root.strs()), // FIXME: strs_mut
+                root,
+            }),
         }
     }
 
     pub fn get_mission_name(&self, kind: MissionKind, id: i32) -> Option<String> {
-        let missions = self.root.str_children.get(&KEYS.missions).unwrap();
+        let keys = &self.root.keys;
+        let missions = self.root.root.as_ref().get_str(keys.missions).unwrap();
         if id > 0 {
-            if let Some(mission) = missions.int_children.get(&(id as u32)) {
-                if let Some(name_node) = mission.str_children.get(&KEYS.name) {
-                    let name = name_node.value.as_ref().unwrap();
+            if let Some(mission) = missions.get_int(id as u32) {
+                if let Some(name_node) = mission.get_str(keys.name) {
+                    let name = name_node.value().unwrap();
                     return Some(format!("{} | {:?} #{}", name, kind, id));
                 }
             }
@@ -48,11 +81,12 @@ impl LocaleRoot {
     }
 
     pub fn get_item_set_name(&self, rank: i32, id: i32) -> Option<String> {
-        let missions = self.root.str_children.get(&KEYS.item_sets).unwrap();
+        let keys = &self.root.keys;
+        let missions = self.root.root.as_ref().get_str(keys.item_sets).unwrap();
         if id > 0 {
-            if let Some(mission) = missions.int_children.get(&(id as u32)) {
-                if let Some(name_node) = mission.str_children.get(&KEYS.kit_name) {
-                    let name = name_node.value.as_ref().unwrap();
+            if let Some(mission) = missions.get_int(id as u32) {
+                if let Some(name_node) = mission.get_str(keys.kit_name) {
+                    let name = name_node.value().unwrap();
                     return Some(if rank > 0 {
                         format!("{} (Rank {}) | Item Set #{}", name, rank, id)
                     } else {
@@ -65,18 +99,20 @@ impl LocaleRoot {
     }
 
     pub fn get_skill_name_desc(&self, id: i32) -> (Option<String>, Option<String>) {
-        let skills = self.root.str_children.get(&KEYS.skill_behavior).unwrap();
+        let keys = &self.root.keys;
+        let root = self.root.root.as_ref();
+        let skills = root.get_str(keys.skill_behavior).unwrap();
         let mut the_name = None;
         let mut the_desc = None;
         if id > 0 {
-            if let Some(skill) = skills.int_children.get(&(id as u32)) {
-                if let Some(name_node) = skill.str_children.get(&KEYS.name) {
-                    let name = name_node.value.as_ref().unwrap();
+            if let Some(skill) = skills.get_int(id as u32) {
+                if let Some(name_node) = skill.get_str(keys.name) {
+                    let name = name_node.value().unwrap();
                     the_name = Some(format!("{} | Skill #{}", name, id));
                 }
-                if let Some(desc_node) = skill.str_children.get(&KEYS.description_ui) {
-                    let desc = desc_node.value.as_ref().unwrap();
-                    the_desc = Some(desc.clone());
+                if let Some(desc_node) = skill.get_str(keys.description_ui) {
+                    let desc = desc_node.value().unwrap();
+                    the_desc = Some(desc.to_string());
                 }
             }
         }

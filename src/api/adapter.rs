@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::iter::Copied;
 use std::slice::Iter;
 
-use assembly_xml::localization::LocaleNode;
+use assembly_xml::localization::LocaleNodeRef;
 use paradox_typed_db::TypedRow;
 use serde::{ser::SerializeMap, Serialize};
 
@@ -140,14 +140,14 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(super) struct LocaleTableAdapter<'a> {
-    node: &'a LocaleNode,
+    node: LocaleNodeRef<'a, 'a>,
     keys: &'a [i32],
 }
 
 impl<'a> LocaleTableAdapter<'a> {
-    pub fn new(node: &'a LocaleNode, keys: &'a [i32]) -> Self {
+    pub fn new(node: LocaleNodeRef<'a, 'a>, keys: &'a [i32]) -> Self {
         Self { node, keys }
     }
 }
@@ -160,8 +160,9 @@ impl<'a> Serialize for LocaleTableAdapter<'a> {
         let mut m = serializer.serialize_map(None)?;
         for &key in self.keys {
             if key >= 0 {
-                if let Some(node) = self.node.int_children.get(&(key as u32)) {
-                    m.serialize_entry(&key, &node.get_keys())?;
+                if let Some(node) = self.node.get_int(key as u32) {
+                    m.serialize_entry(&key, &node.node().get_keys(node.strs()))?;
+                    // FIXME: simplify
                 }
             }
         }

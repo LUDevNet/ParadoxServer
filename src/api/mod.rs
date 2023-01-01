@@ -396,7 +396,7 @@ impl ApiService {
 
     /// Get data from `locale.xml`
     fn locale(&self, accept: Accept, rest: RestPath) -> Result<Response<hyper::Body>, ApiError> {
-        match locale::select_node(self.locale_root.root.as_ref(), rest) {
+        match locale::select_node(self.locale_root.root.node(), rest) {
             Some((node, locale::Mode::All)) => {
                 reply(accept, &locale::All::new(node), StatusCode::OK)
             }
