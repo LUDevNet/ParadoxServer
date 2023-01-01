@@ -27,7 +27,7 @@ rev = "65b2563c861bcb63714aa1b94198864d6c9c1c93"
 
 [dependencies.paradox-typed-db]
 git = "https://github.com/LUDevNet/paradox-typed-db.git"
-rev = "0eec23af81caf15ffd483687a2518d8d7bf3070f"
+rev = "ce818e4cc6ddda17e77ae65b5e9c35d9a73392df"
 
 [dependencies]
 base64 = "0.20.0"

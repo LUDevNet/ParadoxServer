@@ -16,7 +16,10 @@ use std::{
 };
 
 use latin1str::Latin1Str;
-use paradox_typed_db::TypedDatabase;
+use paradox_typed_db::{
+    columns::{ActivitiesColumn, ItemComponentColumn},
+    TypedDatabase,
+};
 use serde::Serialize;
 use tracing::{info, log};
 
@@ -292,10 +295,17 @@ impl ReverseLookup {
         let mut objects = ObjectsRevData::default();
         let mut missions = BTreeMap::<i32, MissionRev>::new();
 
-        for a in db.activities.row_iter() {
-            let id = a.activity_id();
-            if let Some(gate) = a.gate_version() {
-                gate_versions.get_or_default(gate).activities.insert(id);
+        let activities_has_gate_version = db
+            .activities
+            .get_col(ActivitiesColumn::GateVersion)
+            .is_some();
+        if activities_has_gate_version {
+            // TODO: if we add more revs here, move the if into the loop
+            for a in db.activities.row_iter() {
+                let id = a.activity_id();
+                if let Some(gate) = a.gate_version() {
+                    gate_versions.get_or_default(gate).activities.insert(id);
+                }
             }
         }
 
@@ -400,13 +410,19 @@ impl ReverseLookup {
             objects.r(row.itemid()).inventory_component.insert(row.id());
         }
 
+        let item_component_has_commendation_lot = db
+            .item_component
+            .get_col(ItemComponentColumn::CommendationLot)
+            .is_some();
         for row in db.item_component.row_iter() {
             let id = row.id();
             if let Some(lot) = row.currency_lot() {
                 objects.r(lot).item_component.currency_lot.insert(id);
             }
-            if let Some(lot) = row.commendation_lot() {
-                objects.r(lot).item_component.commendation_lot.insert(id);
+            if item_component_has_commendation_lot {
+                if let Some(lot) = row.commendation_lot() {
+                    objects.r(lot).item_component.commendation_lot.insert(id);
+                }
             }
             if let Some(text) = row.sub_items() {
                 for lot in text
