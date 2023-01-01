@@ -1,7 +1,6 @@
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 name: Release Build
 
@@ -11,49 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v3
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
+        uses: dtolnay/rust-toolchain@stable
       - name: Run cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release
-
+        run: cargo build --release
       - name: Upload build artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: paradox-server-linux
           path: target/release/paradox-server
-
   windows:
     name: Build on Windows
     runs-on: windows-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v3
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-
+        uses: dtolnay/rust-toolchain@stable
       - name: Run cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release
-
+        run: cargo build --release
       - name: Upload build artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: paradox-server-windows
           path: target/release/paradox-server.exe
