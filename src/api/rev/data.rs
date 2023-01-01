@@ -17,7 +17,10 @@ use std::{
 
 use latin1str::Latin1Str;
 use paradox_typed_db::{
-    columns::{ActivitiesColumn, ItemComponentColumn},
+    columns::{
+        ActivitiesColumn, DeletionRestrictionsColumn, DestructibleComponentColumn,
+        ItemComponentColumn,
+    },
     TypedDatabase,
 };
 use serde::Serialize;
@@ -353,6 +356,10 @@ impl ReverseLookup {
                 .currency_denomination = Some(row.value());
         }
 
+        let deletion_restrictions_has_gate_version = db
+            .deletion_restrictions
+            .get_col(DeletionRestrictionsColumn::GateVersion)
+            .is_some();
         for row in db.deletion_restrictions.row_iter() {
             let id = row.id();
             if row.check_type() == 0 {
@@ -370,25 +377,33 @@ impl ReverseLookup {
                     }
                 }
             }
-            if let Some(gate) = row.gate_version() {
-                gate_versions
-                    .get_or_default(gate)
-                    .deletion_restrictions
-                    .insert(id);
+            if deletion_restrictions_has_gate_version {
+                if let Some(gate) = row.gate_version() {
+                    gate_versions
+                        .get_or_default(gate)
+                        .deletion_restrictions
+                        .insert(id);
+                }
             }
         }
 
         let mut factions: BTreeMap<i32, FactionRev> = BTreeMap::new();
+        let destructible_component_has_faction_list = db
+            .destructible_component
+            .get_col(DestructibleComponentColumn::FactionList)
+            .is_some();
         for d in db.destructible_component.row_iter() {
             if let Some(faction) = d.faction() {
                 let entry = factions.entry(faction).or_default();
                 entry.destructible.insert(d.id());
             }
 
-            let faction_list: i32 = d.faction_list().decode().parse().unwrap();
-            if faction_list >= 0 {
-                let entry = factions.entry(faction_list).or_default();
-                entry.destructible_list.insert(d.id());
+            if destructible_component_has_faction_list {
+                let faction_list: i32 = d.faction_list().decode().parse().unwrap();
+                if faction_list >= 0 {
+                    let entry = factions.entry(faction_list).or_default();
+                    entry.destructible_list.insert(d.id());
+                }
             }
         }
 
