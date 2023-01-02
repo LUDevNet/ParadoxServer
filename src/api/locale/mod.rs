@@ -100,8 +100,8 @@ impl<'a, 's: 'a> All<'a, 's> {
 
     pub fn new_inner(mut inner: LocaleNodeRef<'a, 's>) -> (String, Self) {
         let mut suffix = String::new();
-        let node = inner.node();
         loop {
+            let node = inner.node();
             let v_count = usize::from(inner.value().is_some());
             let i_count = node.int_children.len();
             let s_count = node.str_children.len();
