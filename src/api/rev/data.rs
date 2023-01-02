@@ -19,7 +19,7 @@ use latin1str::Latin1Str;
 use paradox_typed_db::{
     columns::{
         ActivitiesColumn, DeletionRestrictionsColumn, DestructibleComponentColumn,
-        ItemComponentColumn,
+        ItemComponentColumn, MissionTasksColumn, ObjectsColumn,
     },
     TypedDatabase,
 };
@@ -578,6 +578,10 @@ impl ReverseLookup {
             }
         }
 
+        let mission_tasks_has_gate_version = db
+            .mission_tasks
+            .get_col(MissionTasksColumn::GateVersion)
+            .is_some();
         for r in db.mission_tasks.row_iter() {
             let uid = r.uid();
             let id = r.id();
@@ -591,13 +595,14 @@ impl ReverseLookup {
                 }
             }
 
-            if let Some(gate_version) = r.gate_version() {
-                gate_versions
-                    .get_or_default(gate_version)
-                    .mission_tasks
-                    .insert(uid);
+            if mission_tasks_has_gate_version {
+                if let Some(gate_version) = r.gate_version() {
+                    gate_versions
+                        .get_or_default(gate_version)
+                        .mission_tasks
+                        .insert(uid);
+                }
             }
-
             //skill_ids.entry(r.uid()).or_default().mission_tasks.push(r
         }
 
@@ -615,6 +620,8 @@ impl ReverseLookup {
                 .push(s.object_template());
         }
 
+        let objects_has_internal_notes = db.objects.get_col(ObjectsColumn::InternalNotes).is_some();
+        let objects_has_gate_version = db.objects.get_col(ObjectsColumn::GateVersion).is_some();
         let mut object_types = BTreeMap::<_, Vec<_>>::new();
         for o in db.objects.row_iter() {
             let id = o.id();
@@ -626,10 +633,13 @@ impl ReverseLookup {
             let name = o.name().decode().into_owned();
             let description = o.description().map(Latin1Str::decode).map(Cow::into_owned);
             let display_name = o.display_name().map(Latin1Str::decode).map(Cow::into_owned);
-            let internal_notes = o
-                .internal_notes()
-                .map(Latin1Str::decode)
-                .map(Cow::into_owned);
+            let internal_notes = if objects_has_internal_notes {
+                o.internal_notes()
+                    .map(Latin1Str::decode)
+                    .map(Cow::into_owned)
+            } else {
+                None
+            };
 
             objects.search_index.insert(
                 id,
@@ -641,11 +651,13 @@ impl ReverseLookup {
                 },
             );
 
-            if let Some(gate_version) = o.gate_version() {
-                gate_versions
-                    .get_or_default(gate_version)
-                    .objects
-                    .insert(id);
+            if objects_has_gate_version {
+                if let Some(gate_version) = o.gate_version() {
+                    gate_versions
+                        .get_or_default(gate_version)
+                        .objects
+                        .insert(id);
+                }
             }
         }
 
