@@ -16,22 +16,18 @@ pub(crate) struct Keys {
 }
 
 impl Keys {
-    fn try_new(strs: &Interner) -> Option<Self> {
-        Some(Keys {
-            description: strs.get("description")?,
-            missions: strs.get("Missions")?,
-            mission_text: strs.get("MissionText")?,
-            mission_tasks: strs.get("MissionTasks")?,
-            item_sets: strs.get("ItemSets")?,
-            kit_name: strs.get("kitName")?,
-            skill_behavior: strs.get("SkillBehavior")?,
-            description_ui: strs.get("descriptionUI")?,
-            name: strs.get("name")?,
-        })
-    }
-
-    pub fn new(strs: &Interner) -> Self {
-        Self::try_new(strs).expect("Missing some required locale keys") // FIXME: &mut Interner with intern
+    fn new(strs: &mut Interner) -> Self {
+        Keys {
+            description: strs.intern("description"),
+            missions: strs.intern("Missions"),
+            mission_text: strs.intern("MissionText"),
+            mission_tasks: strs.intern("MissionTasks"),
+            item_sets: strs.intern("ItemSets"),
+            kit_name: strs.intern("kitName"),
+            skill_behavior: strs.intern("SkillBehavior"),
+            description_ui: strs.intern("descriptionUI"),
+            name: strs.intern("name"),
+        }
     }
 }
 
@@ -57,10 +53,10 @@ pub struct LocaleRoot {
 }
 
 impl LocaleRoot {
-    pub fn new(root: LocaleRootNode) -> Self {
+    pub fn new(mut root: LocaleRootNode) -> Self {
         Self {
             root: Arc::new(LocaleRootInner {
-                keys: Keys::new(root.strs()), // FIXME: strs_mut
+                keys: Keys::new(root.strs_mut()), // FIXME: strs_mut
                 root,
             }),
         }

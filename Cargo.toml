@@ -13,7 +13,7 @@ version = "0.3.1"
 
 [dependencies.assembly-pack]
 git = "https://github.com/LUDevNet/Assembly.git"
-rev = "e3a3299776852440f4e155284c7280a950ca80d0"
+rev = "9fb8479b8888729216b85cef2fd499ed7ed1f92a"
 features = ["pki"]
 
 [dependencies.assembly-fdb]
@@ -23,7 +23,7 @@ features = ["serde"]
 
 [dependencies.assembly-xml]
 git = "https://github.com/LUDevNet/Assembly.git"
-rev = "65b2563c861bcb63714aa1b94198864d6c9c1c93"
+rev = "9fb8479b8888729216b85cef2fd499ed7ed1f92a"
 
 [dependencies.paradox-typed-db]
 git = "https://github.com/LUDevNet/paradox-typed-db.git"
