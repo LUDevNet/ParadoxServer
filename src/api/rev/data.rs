@@ -190,8 +190,9 @@ pub struct GateVersionsUse {
 impl GateVersionsUse {
     fn get_or_default(&mut self, key: &Latin1Str) -> &mut GateVersionUse {
         let str_key = key.decode();
-        if self.inner.contains_key(str_key.as_ref()) {
-            self.inner.get_mut(str_key.as_ref()).unwrap()
+        let key = str_key.as_ref();
+        if self.inner.contains_key(key) {
+            self.inner.get_mut(key).expect("contains_key(key) was true")
         } else {
             self.inner.entry(str_key.into_owned()).or_default()
         }
@@ -399,10 +400,11 @@ impl ReverseLookup {
             }
 
             if destructible_component_has_faction_list {
-                let faction_list: i32 = d.faction_list().decode().parse().unwrap();
-                if faction_list >= 0 {
-                    let entry = factions.entry(faction_list).or_default();
-                    entry.destructible_list.insert(d.id());
+                if let Ok(faction_list) = d.faction_list().decode().parse() {
+                    if faction_list >= 0 {
+                        let entry = factions.entry(faction_list).or_default();
+                        entry.destructible_list.insert(d.id());
+                    }
                 }
             }
         }
