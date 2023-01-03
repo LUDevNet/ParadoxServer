@@ -661,13 +661,15 @@ impl ReverseLookup {
             }
         }
 
-        for row in db.player_statistics.row_iter() {
-            let id = row.stat_id();
-            if let Some(gate) = row.gate_version() {
-                gate_versions
-                    .get_or_default(gate)
-                    .player_statistics
-                    .insert(id);
+        if let Some(player_statistics) = &db.player_statistics {
+            for row in player_statistics.row_iter() {
+                let id = row.stat_id();
+                if let Some(gate) = row.gate_version() {
+                    gate_versions
+                        .get_or_default(gate)
+                        .player_statistics
+                        .insert(id);
+                }
             }
         }
 
