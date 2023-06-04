@@ -139,7 +139,7 @@ pub struct ObjectsUse {
     item_component: ObjectItemComponentUse,
     item_sets: BTreeSet<i32>,
     jet_pack_pad_component: ObjectJetPackUse,
-    //loot_table: BTreeSet<i32>, // <- primary key here
+    loot_table_index: BTreeSet<i32>,
     npc_icons_lot: BTreeSet<i32>,
     rebuild_sections: BTreeSet<i32>,
     missions: ObjectMissionUse,
@@ -516,6 +516,7 @@ impl ReverseLookup {
             let id = l.id();
             let entry = loot_table_index.entry(lti).or_default();
             entry.items.insert(id, itemid);
+            objects.r(itemid).loot_table_index.insert(lti);
         }
 
         for m in db.missions.row_iter() {
