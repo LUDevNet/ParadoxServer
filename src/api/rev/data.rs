@@ -321,6 +321,18 @@ impl ReverseLookup {
             }
         }
 
+        if let Some(activity_rewards) = &db.activity_rewards {
+            for row in activity_rewards.row_iter() {
+                if let Some(lmi) = row.loot_matrix_index() {
+                    loot_matrix_index
+                        .entry(lmi)
+                        .or_default()
+                        .activity_rewards
+                        .insert(row.activity_reward_index(), row.object_template());
+                }
+            }
+        }
+
         let mut behaviors: BTreeMap<i32, BehaviorKeyIndex> = BTreeMap::new();
         for bp in db.behavior_parameters.row_iter() {
             let parameter_id = bp.parameter_id();
@@ -691,6 +703,17 @@ impl ReverseLookup {
             }
         }
 
+        if let Some(package_component) = &db.package_component {
+            for row in package_component.row_iter() {
+                loot_matrix_index
+                    .entry(row.loot_matrix_index())
+                    .or_default()
+                    .components
+                    .package
+                    .insert(row.id());
+            }
+        }
+
         if let Some(player_statistics) = &db.player_statistics {
             for row in player_statistics.row_iter() {
                 let id = row.stat_id();
@@ -770,6 +793,17 @@ impl ReverseLookup {
             }
         }
 
+        if let Some(smashable_component) = &db.smashable_component {
+            for row in smashable_component.row_iter() {
+                loot_matrix_index
+                    .entry(row.loot_matrix_index())
+                    .or_default()
+                    .components
+                    .smashable
+                    .insert(row.id());
+            }
+        }
+
         for row in db.speedchat_menu.row_iter() {
             let id = row.id();
             if let Some(gate) = row.gate_version() {
@@ -786,6 +820,17 @@ impl ReverseLookup {
                         .ug_behavior_sounds
                         .insert(id);
                 }
+            }
+        }
+
+        if let Some(vendor_component) = &db.vendor_component {
+            for row in vendor_component.row_iter() {
+                loot_matrix_index
+                    .entry(row.loot_matrix_index())
+                    .or_default()
+                    .components
+                    .vendor
+                    .insert(row.id());
             }
         }
 
