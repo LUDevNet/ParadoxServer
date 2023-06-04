@@ -27,6 +27,7 @@ pub(crate) enum Route {
     Factions,
     FactionById(i32),
     LootTableIndexById(i32),
+    LootMatrixByIndex(i32),
     Missions,
     MissionById(i32),
     MissionTypes,
@@ -53,6 +54,23 @@ impl Route {
                     None => Ok(Self::LootTableIndexById(id)),
                     Some("") => match parts.next() {
                         None => Ok(Self::LootTableIndexById(id)),
+                        Some(_) => Err(()),
+                    },
+                    _ => Err(()),
+                },
+                Err(_) => Err(()),
+            },
+            _ => Err(()),
+        }
+    }
+
+    fn lmi_from_parts(mut parts: str::Split<'_, char>) -> Result<Self, ()> {
+        match parts.next() {
+            Some(key) => match key.parse() {
+                Ok(id) => match parts.next() {
+                    None => Ok(Self::LootMatrixByIndex(id)),
+                    Some("") => match parts.next() {
+                        None => Ok(Self::LootMatrixByIndex(id)),
                         Some(_) => Err(()),
                     },
                     _ => Err(()),
@@ -150,6 +168,7 @@ impl Route {
                     Err(_) => Err(()),
                 },
             },
+            Some("loot_matrix_index") => Self::lmi_from_parts(parts),
             Some("loot_table_index") => Self::lti_from_parts(parts),
             Some("loot-tables") => match parts.next() {
                 Some("indices") => Self::lti_from_parts(parts),

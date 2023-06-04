@@ -19,6 +19,7 @@ mod common;
 mod component_types;
 mod data;
 mod factions;
+mod loot_matrix_index;
 mod loot_table_index;
 mod missions;
 mod object_types;
@@ -96,6 +97,11 @@ impl Service<(super::Accept, Method, Route)> for RevService {
             Route::LootTableIndexById(id) => super::reply(
                 a,
                 &loot_table_index::rev_loop_table_index(self.db, self.rev, id),
+                StatusCode::OK,
+            ),
+            Route::LootMatrixByIndex(index) => super::reply(
+                a,
+                &loot_matrix_index::rev_loop_table_index(self.db, self.rev, index),
                 StatusCode::OK,
             ),
             Route::Missions => super::reply(a, &Keys::new(&self.rev.missions), StatusCode::OK),

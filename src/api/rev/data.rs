@@ -31,6 +31,8 @@ use crate::{
     data::skill_system::match_action_key,
 };
 
+use super::loot_matrix_index::LootMatrixIndexRev;
+
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct SkillIdLookup {
     /// This field collects all the `uid`s of mission tasks that use this skill
@@ -287,6 +289,7 @@ pub struct ReverseLookup {
     pub component_use: ComponentRegistryRev,
     pub activities: BTreeMap<i32, ActivityRev>,
     pub loot_table_index: BTreeMap<i32, LootTableIndexRev>,
+    pub loot_matrix_index: BTreeMap<i32, LootMatrixIndexRev>,
     pub gate_versions: GateVersionsUse,
 }
 
@@ -300,6 +303,7 @@ impl ReverseLookup {
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
         let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
+        let mut loot_matrix_index: BTreeMap<i32, LootMatrixIndexRev> = BTreeMap::new();
         let mut objects = ObjectsRevData::default();
         let mut missions = BTreeMap::<i32, MissionRev>::new();
 
@@ -398,16 +402,26 @@ impl ReverseLookup {
             .get_col(DestructibleComponentColumn::FactionList)
             .is_some();
         for d in db.destructible_component.row_iter() {
+            let id = d.id();
             if let Some(faction) = d.faction() {
                 let entry = factions.entry(faction).or_default();
-                entry.destructible.insert(d.id());
+                entry.destructible.insert(id);
+            }
+
+            if let Some(lmi) = d.loot_matrix_index() {
+                loot_matrix_index
+                    .entry(lmi)
+                    .or_default()
+                    .components
+                    .destructible
+                    .insert(id);
             }
 
             if destructible_component_has_faction_list {
                 if let Ok(faction_list) = d.faction_list().decode().parse() {
                     if faction_list >= 0 {
                         let entry = factions.entry(faction_list).or_default();
-                        entry.destructible_list.insert(d.id());
+                        entry.destructible_list.insert(id);
                     }
                 }
             }
@@ -831,6 +845,7 @@ impl ReverseLookup {
             object_types,
             component_use,
             activities,
+            loot_matrix_index,
             loot_table_index,
             gate_versions,
         }
