@@ -21,7 +21,7 @@ use tower::{make::Shared, ServiceBuilder};
 use tower_http::{
     auth::RequireAuthorizationLayer, cors::CorsLayer, services::ServeDir, trace::TraceLayer,
 };
-use tracing::log::LevelFilter;
+use tracing::log::{self, LevelFilter};
 
 fn load_db(path: &Path) -> color_eyre::Result<Database<'static>> {
     // Load the database file
@@ -103,8 +103,11 @@ async fn main() -> color_eyre::Result<()> {
         }
     }
 
+    let addr = cfg.general.addr();
+    log::info!("Starting server on http://{}", addr);
+
     // Finally, run the server
-    Server::bind(&cfg.general.addr())
+    Server::bind(&addr)
         .serve(Shared::new(service))
         .await
         .expect("server error");
