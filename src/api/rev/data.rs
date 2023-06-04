@@ -80,6 +80,8 @@ pub struct ActivityRev {
 pub struct LootTableIndexRev {
     /// This is a map from `LootTable::id` to `LootTable::itemid` for the current LootTableIndex
     pub items: BTreeMap<i32, i32>,
+    /// This is a set of LootMatrixIndex that contains this LootTable
+    pub loot_matrix: BTreeMap<i32, i32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -164,7 +166,8 @@ pub struct GateVersionUse {
     activities: BTreeSet<i32>,
     deletion_restrictions: BTreeSet<i32>,
     emotes: BTreeSet<i32>,
-    loot_matrix: BTreeSet<i32>,
+    /// Map from LootMatrixIndex to LootMatrix::id
+    loot_matrix: BTreeMap<i32, i32>,
     item_sets: BTreeSet<i32>,
     missions: BTreeSet<i32>,
     mission_tasks: BTreeSet<i32>,
@@ -296,6 +299,7 @@ impl ReverseLookup {
         let mut mission_task_uids = HashMap::new();
         let mut mission_types: BTreeMap<String, BTreeMap<String, Vec<i32>>> = BTreeMap::new();
         let mut gate_versions = GateVersionsUse::default();
+        let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
         let mut objects = ObjectsRevData::default();
         let mut missions = BTreeMap::<i32, MissionRev>::new();
 
@@ -418,8 +422,18 @@ impl ReverseLookup {
 
         for row in db.loot_matrix.row_iter() {
             let id = row.id();
+            let loot_matrix = row.loot_matrix_index();
+            let loot_table = row.loot_table_index();
+            loot_table_index
+                .entry(loot_table)
+                .or_default()
+                .loot_matrix
+                .insert(id, loot_matrix);
             if let Some(gate) = row.gate_version() {
-                gate_versions.get_or_default(gate).loot_matrix.insert(id);
+                gate_versions
+                    .get_or_default(gate)
+                    .loot_matrix
+                    .insert(id, loot_matrix);
             }
         }
 
@@ -509,7 +523,6 @@ impl ReverseLookup {
             }
         }
 
-        let mut loot_table_index: BTreeMap<i32, LootTableIndexRev> = BTreeMap::new();
         for l in db.loot_table.row_iter() {
             let lti = l.loot_table_index();
             let itemid = l.itemid();

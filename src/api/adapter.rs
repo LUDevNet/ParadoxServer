@@ -53,7 +53,9 @@ pub enum AdapterLayout {
 pub(crate) struct TypedTableIterAdapter<'a, 'b, R: TypedRow<'a, 'b>, F, K> {
     /// A structure mapping IDs to primary keys
     pub index: F,
+    /// An iterator over the unique keys
     pub keys: K,
+    /// The table to scan
     pub table: &'b R::Table,
     /// This needs to be the column that is the input to `F`
     pub id_col: usize,
