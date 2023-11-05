@@ -42,9 +42,9 @@ pub mod adapter;
 pub mod docs;
 pub mod files;
 mod locale;
+mod query;
 pub mod rev;
 pub mod tables;
-mod query;
 
 #[derive(Clone, Debug)]
 pub struct PercentDecoded(pub String);
@@ -182,7 +182,9 @@ impl<'r> ApiRoute<'r> {
                 },
             },
             Some("query") => match parts.next() {
-                Some(query) => Ok(Self::Query(PercentDecoded::from_str(query).map_err(|_e| ())?)),
+                Some(query) => Ok(Self::Query(
+                    PercentDecoded::from_str(query).map_err(|_e| ())?,
+                )),
                 None => Err(()),
             },
             Some("locale") => Ok(Self::Locale(RestPath(parts))),
@@ -423,7 +425,11 @@ impl ApiService {
         &self,
         f: impl FnOnce(&Path) -> Result<String, rusqlite::Error>,
     ) -> Result<Response<hyper::Body>, ApiError> {
-        Ok(reply_string(f(&self.sqlite_path)?, TEXT_CSV, StatusCode::OK))
+        Ok(reply_string(
+            f(&self.sqlite_path)?,
+            TEXT_CSV,
+            StatusCode::OK,
+        ))
     }
 
     /// Get data from `locale.xml`

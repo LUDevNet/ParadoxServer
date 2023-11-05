@@ -1,9 +1,6 @@
-use std::{
-    borrow::Borrow,
-    path::Path,
-};
+use std::{borrow::Borrow, path::Path};
 
-use rusqlite::{Connection, OpenFlags, types::ValueRef};
+use rusqlite::{types::ValueRef, Connection, OpenFlags};
 
 use super::PercentDecoded;
 
@@ -14,9 +11,13 @@ fn fmt_valueref(str: &mut String, valueref: &ValueRef) -> Result<(), rusqlite::E
         ValueRef::Real(x) => str.push_str(&x.to_string()),
         ValueRef::Text(x) | ValueRef::Blob(x) => {
             str.push('"');
-            str.push_str(&std::str::from_utf8(*x).map_err(|e| rusqlite::Error::Utf8Error(e))?.replace("\"", "\"\""));
+            str.push_str(
+                &std::str::from_utf8(*x)
+                    .map_err(|e| rusqlite::Error::Utf8Error(e))?
+                    .replace("\"", "\"\""),
+            );
             str.push('"');
-        },
+        }
     }
     Ok(())
 }
@@ -37,11 +38,11 @@ pub(super) fn query<'a>(
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
-        for i in 0..(cols-1) {
+        for i in 0..(cols - 1) {
             fmt_valueref(&mut response, &row.get_ref(i)?)?;
             response.push(',');
         }
-        fmt_valueref(&mut response, &row.get_ref(cols-1)?)?;
+        fmt_valueref(&mut response, &row.get_ref(cols - 1)?)?;
         response.push('\n');
     }
     Ok(response)
