@@ -12,9 +12,9 @@ fn fmt_valueref(str: &mut String, valueref: &ValueRef) -> Result<(), rusqlite::E
         ValueRef::Text(x) | ValueRef::Blob(x) => {
             str.push('"');
             str.push_str(
-                &std::str::from_utf8(*x)
-                    .map_err(|e| rusqlite::Error::Utf8Error(e))?
-                    .replace("\"", "\"\""),
+                &std::str::from_utf8(x)
+                    .map_err(rusqlite::Error::Utf8Error)?
+                    .replace('"', "\"\""),
             );
             str.push('"');
         }
@@ -22,7 +22,7 @@ fn fmt_valueref(str: &mut String, valueref: &ValueRef) -> Result<(), rusqlite::E
     Ok(())
 }
 
-pub(super) fn query<'a>(
+pub(super) fn query(
     sqlite_path: &Path,
     query: PercentDecoded,
 ) -> Result<String, rusqlite::Error> {
@@ -33,7 +33,7 @@ pub(super) fn query<'a>(
     let cols = stmt.column_count();
     let mut response = String::new();
     response.push_str(&stmt.column_names().join(","));
-    response.push_str("\n");
+    response.push('\n');
 
     let mut rows = stmt.query([])?;
 
