@@ -3,7 +3,7 @@ use std::{
     fmt,
     future::{ready, Ready},
     io,
-    path::Path,
+    path::{Path, PathBuf},
     str::{FromStr, Split, Utf8Error},
     task::{self, Poll},
 };
@@ -44,6 +44,7 @@ pub mod files;
 mod locale;
 pub mod rev;
 pub mod tables;
+mod query;
 
 #[derive(Clone, Debug)]
 pub struct PercentDecoded(pub String);
@@ -63,6 +64,12 @@ impl Borrow<String> for PercentDecoded {
     }
 }
 
+impl Borrow<str> for PercentDecoded {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 impl ToString for PercentDecoded {
     #[inline]
     fn to_string(&self) -> String {
@@ -73,6 +80,7 @@ impl ToString for PercentDecoded {
 /// This enum is for server side errors (i.e. `5XX`) only!
 pub enum ApiError {
     DB(CastError),
+    Sqlite(rusqlite::Error),
     Json(serde_json::Error),
     Yaml(serde_yaml::Error),
 }
@@ -83,6 +91,12 @@ pub type ApiResult = Result<ApiResponse, ApiError>;
 impl From<CastError> for ApiError {
     fn from(value: CastError) -> Self {
         Self::DB(value)
+    }
+}
+
+impl From<rusqlite::Error> for ApiError {
+    fn from(value: rusqlite::Error) -> Self {
+        Self::Sqlite(value)
     }
 }
 
@@ -102,6 +116,7 @@ impl From<ApiError> for io::Error {
     fn from(value: ApiError) -> Self {
         match value {
             ApiError::DB(e) => into_other_io_error(e),
+            ApiError::Sqlite(e) => into_other_io_error(e),
             ApiError::Json(e) => into_other_io_error(e),
             ApiError::Yaml(e) => into_other_io_error(e),
         }
@@ -135,6 +150,7 @@ enum ApiRoute<'r> {
     TableByName(&'r str),
     AllTableRows(&'r str),
     TableRowsByPK(&'r str, &'r str),
+    Query(PercentDecoded),
     Locale(RestPath<'r>),
     Crc(u32),
     Rev(rev::Route),
@@ -164,6 +180,10 @@ impl<'r> ApiRoute<'r> {
                         _ => Err(()),
                     },
                 },
+            },
+            Some("query") => match parts.next() {
+                Some(query) => Ok(Self::Query(PercentDecoded::from_str(query).map_err(|_e| ())?)),
+                None => Err(()),
             },
             Some("locale") => Ok(Self::Locale(RestPath(parts))),
             Some("rev") => rev::Route::from_parts(parts).map(ApiRoute::Rev),
@@ -345,6 +365,7 @@ pub struct ApiService {
     api_url: HeaderValue,
     rev: rev::RevService,
     res: EventSender,
+    sqlite_path: PathBuf,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
@@ -353,6 +374,8 @@ const APPLICATION_JSON: HeaderValue = HeaderValue::from_static("application/json
 const APPLICATION_YAML: HeaderValue = HeaderValue::from_static("application/yaml; charset=utf-8");
 #[allow(clippy::declare_interior_mutable_const)]
 const TEXT_HTML: HeaderValue = HeaderValue::from_static("text/html; charset=utf-8");
+#[allow(clippy::declare_interior_mutable_const)]
+const TEXT_CSV: HeaderValue = HeaderValue::from_static("text/csv; charset=utf-8");
 
 impl ApiService {
     #[allow(clippy::too_many_arguments)] // FIXME
@@ -365,6 +388,7 @@ impl ApiService {
         tydb: &'static TypedDatabase,
         rev: &'static ReverseLookup,
         res_path: &Path,
+        sqlite_path: PathBuf,
     ) -> Self {
         let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
         Self {
@@ -375,6 +399,7 @@ impl ApiService {
             api_url,
             res: spawn_handler(res_path),
             rev: RevService::new(tydb, locale_root, rev),
+            sqlite_path,
         }
     }
 
@@ -392,6 +417,13 @@ impl ApiService {
         f: impl FnOnce(Database<'static>) -> Result<Option<T>, CastError>,
     ) -> Result<Response<hyper::Body>, ApiError> {
         reply_opt(accept, f(self.db)?.as_ref())
+    }
+
+    fn query_api(
+        &self,
+        f: impl FnOnce(&Path) -> Result<String, rusqlite::Error>,
+    ) -> Result<Response<hyper::Body>, ApiError> {
+        Ok(reply_string(f(&self.sqlite_path)?, TEXT_CSV, StatusCode::OK))
     }
 
     /// Get data from `locale.xml`
@@ -513,6 +545,9 @@ where
             (Method::GET, ApiRoute::TableRowsByPK(name, key)) => {
                 self.db_api_opt(accept, |db| tables::table_key_json(db, name, key))
             }
+            (Method::GET, ApiRoute::Query(query)) => {
+                self.query_api(|sqlite_path| query::query(sqlite_path, query))
+            }
             (method, ApiRoute::Locale(rest)) => match method {
                 Method::GET => self.locale(accept, rest),
                 m if m.as_str() == "QUERY" => {
@@ -546,6 +581,7 @@ pub fn service(
     tydb: &'static TypedDatabase<'static>,
     rev: &'static ReverseLookup,
 ) -> Result<ApiService, color_eyre::Report> {
+    let sqlite_path = cfg.sqlite.clone();
     // The pack service
     let res_path = cfg
         .res
@@ -567,5 +603,6 @@ pub fn service(
         tydb,
         rev,
         res_path,
+        sqlite_path,
     ))
 }

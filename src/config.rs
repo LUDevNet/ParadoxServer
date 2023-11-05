@@ -160,6 +160,8 @@ pub struct DataOptions {
     pub lu_res_prefix: Option<String>,
     /// The locale.xml file
     pub locale: PathBuf,
+    /// The sqlite file to serve SQL queries from
+    pub sqlite: PathBuf,
 }
 
 #[derive(Deserialize)]
