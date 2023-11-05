@@ -74,6 +74,10 @@ default-features = false
 version = "1.23.0"
 features = ["rt-multi-thread", "macros", "signal"]
 
+[dependencies.rusqlite]
+version = "0.26.3"
+features = ["bundled"]
+
 [dependencies.serde]
 version = "1.0.151"
 features = ["derive"]
