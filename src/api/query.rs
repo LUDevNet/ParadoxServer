@@ -22,10 +22,7 @@ fn fmt_valueref(str: &mut String, valueref: &ValueRef) -> Result<(), rusqlite::E
     Ok(())
 }
 
-pub(super) fn query(
-    sqlite_path: &Path,
-    query: PercentDecoded,
-) -> Result<String, rusqlite::Error> {
+pub(super) fn query(sqlite_path: &Path, query: PercentDecoded) -> Result<String, rusqlite::Error> {
     dbg!(&query);
     let conn = Connection::open_with_flags(sqlite_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = conn.prepare(query.borrow())?;
