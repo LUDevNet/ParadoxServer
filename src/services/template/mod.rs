@@ -505,7 +505,14 @@ impl std::future::Future for SpaFuture {
     type Output = Result<Response<hyper::Body>, io::Error>;
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         self.project().inner.poll(cx).map(|r| match r {
-            Ok(s) => Ok(Response::new(hyper::Body::from(s))),
+            Ok(s) => Ok({
+                let mut r = Response::new(hyper::Body::from(s));
+                r.headers_mut().append(
+                    http::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static("text/html; charset=utf-8"),
+                );
+                r
+            }),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         })
     }
