@@ -41,6 +41,7 @@ use self::{
 pub mod adapter;
 pub mod docs;
 pub mod files;
+mod graphql;
 mod locale;
 mod query;
 pub mod rev;
@@ -81,6 +82,7 @@ impl ToString for PercentDecoded {
 pub enum ApiError {
     DB(CastError),
     Sqlite(rusqlite::Error),
+    GraphQl(graphql::QueryError),
     Json(serde_json::Error),
     Yaml(serde_yaml::Error),
 }
@@ -97,6 +99,12 @@ impl From<CastError> for ApiError {
 impl From<rusqlite::Error> for ApiError {
     fn from(value: rusqlite::Error) -> Self {
         Self::Sqlite(value)
+    }
+}
+
+impl From<graphql::QueryError> for ApiError {
+    fn from(value: graphql::QueryError) -> Self {
+        Self::GraphQl(value)
     }
 }
 
@@ -117,6 +125,7 @@ impl From<ApiError> for io::Error {
         match value {
             ApiError::DB(e) => into_other_io_error(e),
             ApiError::Sqlite(e) => into_other_io_error(e),
+            ApiError::GraphQl(e) => into_other_io_error(e),
             ApiError::Json(e) => into_other_io_error(e),
             ApiError::Yaml(e) => into_other_io_error(e),
         }
@@ -151,6 +160,7 @@ enum ApiRoute<'r> {
     AllTableRows(&'r str),
     TableRowsByPK(&'r str, &'r str),
     Query(PercentDecoded),
+    GraphQl(PercentDecoded),
     Locale(RestPath<'r>),
     Crc(u32),
     Rev(rev::Route),
@@ -183,6 +193,12 @@ impl<'r> ApiRoute<'r> {
             },
             Some("query") => match parts.next() {
                 Some(query) => Ok(Self::Query(
+                    PercentDecoded::from_str(query).map_err(|_e| ())?,
+                )),
+                None => Err(()),
+            },
+            Some("graphql") => match parts.next() {
+                Some(query) => Ok(Self::GraphQl(
                     PercentDecoded::from_str(query).map_err(|_e| ())?,
                 )),
                 None => Err(()),
@@ -368,6 +384,7 @@ pub struct ApiService {
     rev: rev::RevService,
     res: EventSender,
     sqlite_path: PathBuf,
+    db_table_rels: graphql::TableRels,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
@@ -393,6 +410,7 @@ impl ApiService {
         sqlite_path: PathBuf,
     ) -> Self {
         let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
+        let db_table_rels = graphql::read_out_table_rels(&sqlite_path).unwrap();
         Self {
             pack,
             db,
@@ -402,6 +420,7 @@ impl ApiService {
             res: spawn_handler(res_path),
             rev: RevService::new(tydb, locale_root, rev),
             sqlite_path,
+            db_table_rels,
         }
     }
 
@@ -428,6 +447,17 @@ impl ApiService {
         Ok(reply_string(
             f(&self.sqlite_path)?,
             TEXT_CSV,
+            StatusCode::OK,
+        ))
+    }
+
+    fn graphql_api(
+        &self,
+        f: impl FnOnce(&Path, &graphql::TableRels) -> Result<String, graphql::QueryError>,
+    ) -> Result<Response<hyper::Body>, ApiError> {
+        Ok(reply_string(
+            f(&self.sqlite_path, &self.db_table_rels)?,
+            APPLICATION_JSON,
             StatusCode::OK,
         ))
     }
@@ -553,6 +583,11 @@ where
             }
             (Method::GET, ApiRoute::Query(query)) => {
                 self.query_api(|sqlite_path| query::query(sqlite_path, query))
+            }
+            (Method::GET, ApiRoute::GraphQl(query)) => {
+                self.graphql_api(|sqlite_path, table_rels| {
+                    graphql::graphql(sqlite_path, table_rels, query)
+                })
             }
             (method, ApiRoute::Locale(rest)) => match method {
                 Method::GET => self.locale(accept, rest),
