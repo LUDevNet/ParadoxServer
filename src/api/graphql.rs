@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Write;
 use std::{borrow::Borrow, path::Path};
@@ -441,27 +442,31 @@ fn table_to_json_inner(
 
         if let rusqlite::types::ValueRef::Integer(rowid) = rowid_col {
             // since SQL joins duplicate values, we use the sorted rowid to deduplicate
-            if rowid > table_query.rowid {
-                // new row, read in data
-                if table_query.rowid > 0 {
-                    // we read a row before, whose subbuffers need to be flushed out
-                    let out = flush_table_data(table_query);
-                    table_query.flushed_outputs.push(out);
-                }
-                // keep track of this rowid for the next row'scheck
-                table_query.rowid = rowid;
+            match rowid.cmp(&table_query.rowid) {
+                Ordering::Greater => {
+                    // new row, read in data
+                    if table_query.rowid > 0 {
+                        // we read a row before, whose subbuffers need to be flushed out
+                        let out = flush_table_data(table_query);
+                        table_query.flushed_outputs.push(out);
+                    }
+                    // keep track of this rowid for the next row'scheck
+                    table_query.rowid = rowid;
 
-                for col in &mut table_query.cols {
-                    col.value = Some(valueref_to_json(&row.get_ref(*icol)?)?);
-                    *icol += 1;
+                    for col in &mut table_query.cols {
+                        col.value = Some(valueref_to_json(&row.get_ref(*icol)?)?);
+                        *icol += 1;
+                    }
                 }
-            } else if rowid == table_query.rowid {
-                // already encountered this entry in a previous join, skip this table but not subtables, which might have new subentries
-                *icol += table_query.cols.len();
-            } else {
-                // already encountered this entry in a previous join, skip this and all subtables
-                skip = true;
-                *icol += table_query.cols.len();
+                Ordering::Equal => {
+                    // already encountered this entry in a previous join, skip this table but not subtables, which might have new subentries
+                    *icol += table_query.cols.len();
+                }
+                Ordering::Less => {
+                    // already encountered this entry in a previous join, skip this and all subtables
+                    skip = true;
+                    *icol += table_query.cols.len();
+                }
             }
         } else {
             // left join is null, skip
