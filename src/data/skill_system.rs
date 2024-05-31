@@ -1,17 +1,4 @@
 use latin1str::Latin1Str;
-use serde::Serialize;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct BehaviorTemplate<'a> {
-    #[serde(rename = "behaviorID")]
-    behavior_id: i32,
-    #[serde(rename = "templateID")]
-    template_id: i32,
-    #[serde(rename = "effectID")]
-    effect_id: i32,
-    #[serde(rename = "effectHandle")]
-    effect_handle: &'a Latin1Str,
-}
 
 pub fn match_action_key(key: &Latin1Str) -> bool {
     matches!(

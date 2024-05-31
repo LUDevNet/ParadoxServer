@@ -5,9 +5,6 @@ use serde::Serialize;
 
 use super::ReverseLookup;
 
-#[derive(Serialize)]
-struct LootMatrixResult {}
-
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct LootMatrixIndexRev {
     #[serde(skip_serializing_if = "LootMatrixIndexComponents::is_empty")]

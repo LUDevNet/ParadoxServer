@@ -71,10 +71,9 @@ impl Borrow<str> for PercentDecoded {
     }
 }
 
-impl ToString for PercentDecoded {
-    #[inline]
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl fmt::Display for PercentDecoded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
