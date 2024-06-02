@@ -60,6 +60,7 @@ pub struct TableRel {
 }
 
 pub type TableRels = HashMap<String, HashMap<String, TableRel>>;
+pub type Fragments<'a> = HashMap<&'a str, &'a Vec<Selection<'a, String>>>;
 
 #[derive(Debug)]
 struct TableQuery {
@@ -164,22 +165,22 @@ pub(super) fn graphql(
 ) -> Result<String, QueryError> {
     let doc = parse_query::<String>(query)?;
 
-    let def = match doc.definitions.len() {
-        0 => {
-            return Err(invalid_query("empty query".to_string()));
-        }
-        1 => match &doc.definitions[0] {
-            Definition::Operation(op_def) => op_def,
-            Definition::Fragment(_) => {
-                return Err(invalid_query(
-                    "TODO: fragment definition not supported".to_string(),
-                ));
+    let mut fragments: Fragments = HashMap::new();
+    let mut def = None;
+
+    for definition in &doc.definitions {
+        match definition {
+            Definition::Operation(op_def) => def = Some(op_def),
+            Definition::Fragment(frag) => {
+                fragments.insert(&frag.name, &frag.selection_set.items);
             }
-        },
-        n => {
-            return Err(invalid_query(format!(
-                "only 1 definition allowed, got: {n}"
-            )));
+        }
+    }
+
+    let def = match def {
+        Some(x) => x,
+        None => {
+            return Err(invalid_query("no operation found".to_string()));
         }
     };
 
@@ -208,7 +209,7 @@ pub(super) fn graphql(
                 ));
             }
             Selection::Field(f) => {
-                let mut table_query = field_to_table_query(table_rels, f)?;
+                let mut table_query = field_to_table_query(table_rels, &fragments, f)?;
 
                 let query = table_query_to_sql(&table_query);
 
@@ -233,14 +234,24 @@ pub(super) fn graphql(
 /// Recursively parses a GraphQL field into an abstract TableQuery.
 fn field_to_table_query(
     table_rels: &TableRels,
+    fragments: &Fragments,
     field: &Field<String>,
 ) -> Result<TableQuery, QueryError> {
-    field_to_table_query_inner(table_rels, field, field.name.as_ref())
+    let mut fragment_calls = vec![];
+    field_to_table_query_inner(
+        table_rels,
+        fragments,
+        &mut fragment_calls,
+        field,
+        field.name.as_ref(),
+    )
 }
 
-fn field_to_table_query_inner(
+fn field_to_table_query_inner<'a>(
     table_rels: &TableRels,
-    field: &Field<String>,
+    fragments: &'a Fragments,
+    fragment_calls: &mut Vec<&'a str>,
+    field: &'a Field<String>,
     table_name: &str,
 ) -> Result<TableQuery, QueryError> {
     let mut table_query = TableQuery {
@@ -267,7 +278,27 @@ fn field_to_table_query_inner(
         });
     };
 
-    for selection in &field.selection_set.items {
+    process_selections(
+        table_rels,
+        fragments,
+        fragment_calls,
+        this_table_rels,
+        &mut table_query,
+        &field.selection_set.items,
+    )?;
+
+    Ok(table_query)
+}
+
+fn process_selections<'a>(
+    table_rels: &TableRels,
+    fragments: &'a Fragments,
+    fragment_calls: &mut Vec<&'a str>,
+    this_table_rels: &HashMap<String, TableRel>,
+    table_query: &mut TableQuery,
+    selections: &'a Vec<Selection<String>>,
+) -> Result<(), QueryError> {
+    for selection in selections {
         match selection {
             Selection::Field(f) => {
                 if f.selection_set.items.is_empty() {
@@ -303,7 +334,13 @@ fn field_to_table_query_inner(
                     };
 
                     // recurse with the fields in curly braces
-                    let tq = field_to_table_query_inner(table_rels, f, rel.to_table.as_ref())?;
+                    let tq = field_to_table_query_inner(
+                        table_rels,
+                        fragments,
+                        fragment_calls,
+                        f,
+                        rel.to_table.as_ref(),
+                    )?;
 
                     // link the parent query to the child query
                     table_query.joins.push(Join {
@@ -315,15 +352,42 @@ fn field_to_table_query_inner(
                     });
                 }
             }
-            _ => {
+            Selection::FragmentSpread(spread) => match fragments.get(&spread.fragment_name[..]) {
+                None => {
+                    return Err(invalid_query(format!(
+                        "Fragment spread {} references unknown fragment definition",
+                        spread.fragment_name
+                    )));
+                }
+                Some(sels) => {
+                    if fragment_calls.contains(&&spread.fragment_name[..]) {
+                        return Err(invalid_query(format!(
+                            "fragment recursion: {} via {}",
+                            spread.fragment_name,
+                            fragment_calls.join(", ")
+                        )));
+                    }
+                    fragment_calls.push(&spread.fragment_name);
+                    process_selections(
+                        table_rels,
+                        fragments,
+                        fragment_calls,
+                        this_table_rels,
+                        table_query,
+                        sels,
+                    )?;
+                    fragment_calls.pop();
+                }
+            },
+            Selection::InlineFragment(_) => {
                 return Err(invalid_query(
-                    "selection set in query should only contain Fields".to_string(),
+                    "inline fragments are not supported".to_string(),
                 ));
             }
         }
     }
 
-    Ok(table_query)
+    Ok(())
 }
 
 /// Generates equivalent SQL from a parsed TableQuery.
