@@ -36,6 +36,13 @@ fn load_db(path: &Path) -> color_eyre::Result<Database<'static>> {
     Ok(Database::new(buf))
 }
 
+fn load_table_rels(path: &Path) -> color_eyre::Result<&'static api::graphql::TableRels> {
+    let table_rels = api::graphql::read_out_table_rels(path)?;
+    // We want to keep this mapped until the end of the program!
+    let mref: &'static api::graphql::TableRels = Box::leak(Box::new(table_rels));
+    Ok(mref)
+}
+
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     pretty_env_logger::formatted_builder()
@@ -53,6 +60,9 @@ async fn main() -> color_eyre::Result<()> {
 
     // Load the database
     let db = load_db(&cfg.data.cdclient)?;
+    // Load SQL table relations
+    let table_rels = load_table_rels(&cfg.data.sqlite)?;
+    let sqlite_path = Box::leak(Box::new(cfg.data.sqlite.clone()));
 
     // Load the locale
     let locale_root = load_locale(&cfg.data.locale)
@@ -73,7 +83,17 @@ async fn main() -> color_eyre::Result<()> {
 
     // Initialize the Api
     let auth_kind = AuthKind::of(&cfg.auth);
-    let api = api::service(&cfg.data, locale_root, auth_kind, base_url, db, tydb, rev)?;
+    let api = api::service(
+        &cfg.data,
+        locale_root,
+        auth_kind,
+        base_url,
+        db,
+        tydb,
+        rev,
+        table_rels,
+        sqlite_path,
+    )?;
     // Unfortunately still need the API fallback
     let api_fallback = FallbackService::new(cfg.data.lu_json_cache.as_path());
 

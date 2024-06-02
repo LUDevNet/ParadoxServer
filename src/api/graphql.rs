@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
-use std::{borrow::Borrow, path::Path};
+use std::path::Path;
 
 use rusqlite::{types::ValueRef, Connection, OpenFlags};
 
@@ -10,8 +10,6 @@ use graphql_parser::{
     parse_query,
     query::{Definition, Field, OperationDefinition, Selection},
 };
-
-use super::PercentDecoded;
 
 #[derive(Debug)]
 pub struct QueryError {
@@ -162,9 +160,9 @@ pub fn read_out_table_rels(sqlite_path: &Path) -> Result<TableRels, rusqlite::Er
 pub(super) fn graphql(
     sqlite_path: &Path,
     table_rels: &TableRels,
-    query: PercentDecoded,
+    query: &str,
 ) -> Result<String, QueryError> {
-    let doc = parse_query::<String>(query.borrow())?;
+    let doc = parse_query::<String>(query)?;
 
     let def = match doc.definitions.len() {
         0 => {
