@@ -443,11 +443,7 @@ impl ApiService {
         &self,
         f: impl FnOnce(&Path) -> Result<String, rusqlite::Error>,
     ) -> Result<Response<hyper::Body>, ApiError> {
-        Ok(reply_string(
-            f(self.sqlite_path)?,
-            TEXT_CSV,
-            StatusCode::OK,
-        ))
+        Ok(reply_string(f(self.sqlite_path)?, TEXT_CSV, StatusCode::OK))
     }
 
     fn graphql_api(
