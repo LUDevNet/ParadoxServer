@@ -3,7 +3,7 @@ use std::{
     fmt,
     future::{ready, Ready},
     io,
-    path::{Path, PathBuf},
+    path::Path,
     str::{FromStr, Split, Utf8Error},
     task::{self, Poll},
 };
@@ -19,7 +19,7 @@ use hyper::body::Bytes;
 use paradox_typed_db::TypedDatabase;
 use percent_encoding::percent_decode_str;
 use pin_project::pin_project;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tower::Service;
 
 use crate::{
@@ -41,7 +41,7 @@ use self::{
 pub mod adapter;
 pub mod docs;
 pub mod files;
-mod graphql;
+pub mod graphql;
 mod locale;
 mod query;
 pub mod rev;
@@ -382,8 +382,8 @@ pub struct ApiService {
     api_url: HeaderValue,
     rev: rev::RevService,
     res: EventSender,
-    sqlite_path: PathBuf,
-    db_table_rels: graphql::TableRels,
+    sqlite_path: &'static Path,
+    db_table_rels: &'static graphql::TableRels,
 }
 
 #[allow(clippy::declare_interior_mutable_const)] // c.f. https://github.com/rust-lang/rust-clippy/issues/5812
@@ -405,11 +405,11 @@ impl ApiService {
         api_uri: Uri,
         tydb: &'static TypedDatabase,
         rev: &'static ReverseLookup,
+        db_table_rels: &'static graphql::TableRels,
         res_path: &Path,
-        sqlite_path: PathBuf,
+        sqlite_path: &'static Path,
     ) -> Self {
         let api_url = HeaderValue::from_str(&api_uri.to_string()).unwrap();
-        let db_table_rels = graphql::read_out_table_rels(&sqlite_path).unwrap();
         Self {
             pack,
             db,
@@ -444,7 +444,7 @@ impl ApiService {
         f: impl FnOnce(&Path) -> Result<String, rusqlite::Error>,
     ) -> Result<Response<hyper::Body>, ApiError> {
         Ok(reply_string(
-            f(&self.sqlite_path)?,
+            f(self.sqlite_path)?,
             TEXT_CSV,
             StatusCode::OK,
         ))
@@ -455,7 +455,7 @@ impl ApiService {
         f: impl FnOnce(&Path, &graphql::TableRels) -> Result<String, graphql::QueryError>,
     ) -> Result<Response<hyper::Body>, ApiError> {
         Ok(reply_string(
-            f(&self.sqlite_path, &self.db_table_rels)?,
+            f(self.sqlite_path, self.db_table_rels)?,
             APPLICATION_JSON,
             StatusCode::OK,
         ))
@@ -531,6 +531,11 @@ impl std::future::Future for ApiFuture {
 static ALLOW_GET_HEAD: HeaderValue = HeaderValue::from_static("GET,HEAD");
 static ALLOW_GET_HEAD_QUERY: HeaderValue = HeaderValue::from_static("GET,HEAD,QUERY");
 
+#[derive(Deserialize)]
+struct GraphQlRequest {
+    query: String,
+}
+
 impl<ReqBody> Service<Request<ReqBody>> for ApiService
 where
     ReqBody: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
@@ -585,8 +590,36 @@ where
             }
             (Method::GET, ApiRoute::GraphQl(query)) => {
                 self.graphql_api(|sqlite_path, table_rels| {
-                    graphql::graphql(sqlite_path, table_rels, query)
+                    graphql::graphql(sqlite_path, table_rels, query.borrow())
                 })
+            }
+            (Method::POST, ApiRoute::GraphQl(_)) => {
+                let sqlite_path = self.sqlite_path;
+                let db_table_rels = self.db_table_rels;
+                return ApiFuture::boxed(async move {
+                    let bytes = match hyper::body::to_bytes(body).await {
+                        Ok(x) => x,
+                        Err(_) => {
+                            return reply_400(accept, "malformed POST body", "could not read body");
+                        }
+                    };
+                    let query = match std::str::from_utf8(&bytes) {
+                        Ok(x) => x,
+                        Err(_) => {
+                            return reply_400(
+                                accept,
+                                "malformed POST body",
+                                "could not parse body as utf8 string",
+                            );
+                        }
+                    };
+                    let query: GraphQlRequest = serde_json::from_str(query)?;
+                    Ok(reply_string(
+                        graphql::graphql(sqlite_path, db_table_rels, &query.query)?,
+                        APPLICATION_JSON,
+                        StatusCode::OK,
+                    ))
+                });
             }
             (method, ApiRoute::Locale(rest)) => match method {
                 Method::GET => self.locale(accept, rest),
@@ -612,6 +645,7 @@ where
 }
 
 /// Make the API
+#[allow(clippy::too_many_arguments)]
 pub fn service(
     cfg: &DataOptions,
     locale_root: LocaleRoot,
@@ -620,8 +654,9 @@ pub fn service(
     db: Database<'static>,
     tydb: &'static TypedDatabase<'static>,
     rev: &'static ReverseLookup,
+    db_table_rels: &'static graphql::TableRels,
+    sqlite_path: &'static Path,
 ) -> Result<ApiService, color_eyre::Report> {
-    let sqlite_path = cfg.sqlite.clone();
     // The pack service
     let res_path = cfg
         .res
@@ -642,6 +677,7 @@ pub fn service(
         api_uri,
         tydb,
         rev,
+        db_table_rels,
         res_path,
         sqlite_path,
     ))

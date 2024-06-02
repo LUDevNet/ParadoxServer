@@ -14,7 +14,12 @@ impl CorsLayerExt<CorsOptions> for CorsLayer {
     fn configure(cfg: &CorsOptions) -> Self {
         Self::new()
             .allow_headers([AUTHORIZATION])
-            .allow_methods([Method::OPTIONS, Method::GET, METHOD_QUERY.clone()])
+            .allow_methods([
+                Method::OPTIONS,
+                Method::GET,
+                Method::POST,
+                METHOD_QUERY.clone(),
+            ])
             .allow_origin(match cfg.all {
                 true => AllowOrigin::any(),
                 false => AllowOrigin::list(cfg.domains.clone()),
