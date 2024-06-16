@@ -4,6 +4,17 @@ version = "0.1.0"
 authors = ["Xiphoseer <xiphoseer@mailbox.org>"]
 edition = "2018"
 
+[features]
+sqlite-to-graphql-schema = ["argh"]
+
+[[example]]
+name = "sqlite-to-graphql-schema"
+required-features = ["sqlite-to-graphql-schema"]
+
+[dependencies.argh]
+version = "0.1.9"
+optional = true
+
 [dependencies.assembly-core]
 version = "0.3.1"
 
