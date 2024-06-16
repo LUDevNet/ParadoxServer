@@ -145,8 +145,10 @@ pub fn read_out_table_rels(sqlite_path: &Path) -> Result<TableRels, rusqlite::Er
         // merge rev rels into main rels
         for (table_name, rels) in rev_rels {
             let t_rels = table_rels.entry(table_name).or_default();
-            if let Some(rel) = rels.values().next() {
-                t_rels.insert(rel.to_table.clone(), rel.clone());
+            if rels.len() == 1 {
+                if let Some(rel) = rels.values().next() {
+                    t_rels.insert(rel.to_table.clone(), rel.clone());
+                }
             }
             for (col_name, rel) in rels {
                 t_rels.insert(col_name, rel);
